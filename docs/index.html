@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>MyChat</title>
+<meta name="description" content="MyChat - private end-to-end encrypted chat">
+<meta name="theme-color" content="#f0f2f5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="MyChat">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- Splash -->
+<div id="splash"><img src="icons/logo.svg" alt="" width="84" height="84"><div class="splash-name">MyChat</div><div class="splash-bar"><i></i></div><div class="splash-lock">End-to-end encrypted</div></div>
+
+<!-- Auth -->
+<div id="auth" class="screen hidden">
+  <div class="auth-band"></div>
+  <div class="auth-top"><img src="icons/logo.svg" alt="" width="34" height="34"><span>MyChat</span></div>
+  <div class="auth-card">
+    <div class="auth-tabs"><button id="tab-login" class="on" type="button">Login</button><button id="tab-signup" type="button">Sign up</button><i id="tab-ink"></i></div>
+    <h1 id="auth-title">Welcome back</h1>
+    <p id="auth-sub" class="muted">Apne username aur password se login karo.</p>
+    <form id="auth-form" autocomplete="on" novalidate>
+      <label class="fld"><span>Username</span><input id="f-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="20" placeholder="e.g. jaideep"></label>
+      <label class="fld su"><span>Display name</span><input id="f-name" autocomplete="nickname" maxlength="40" placeholder="Aapka naam (chat me dikhega)"></label>
+      <label class="fld"><span>Password</span><div class="pw"><input id="f-pass" name="password" type="password" autocomplete="current-password" maxlength="100" placeholder="Kam se kam 6 characters"><button type="button" id="pw-eye" class="icon-btn" aria-label="Show password"></button></div></label>
+      <label class="fld su"><span>Secret Key <em>(dono users ka same)</em></span><input id="f-secret" type="password" autocomplete="off" maxlength="100" placeholder="Shared secret key — kisi ko mat batana"></label>
+      <p class="hint su">🔒 Secret Key se messages aapke phone/browser me hi encrypt hote hain. Ye key server ko kabhi nahi bheji jaati. <b>Bhool gaye to messages wapas nahi aayenge.</b></p>
+      <div id="auth-err" class="err hidden" role="alert"></div>
+      <button id="auth-submit" class="btn primary" type="submit"><span>Login</span><i class="spin"></i></button>
+    </form>
+  </div>
+  <div class="auth-foot">🔒 Private &amp; end-to-end encrypted</div>
+</div>
+
+<!-- Secret key prompt -->
+<div id="keyscreen" class="screen hidden">
+  <div class="auth-band"></div>
+  <div class="auth-top"><img src="icons/logo.svg" alt="" width="34" height="34"><span>MyChat</span></div>
+  <div class="auth-card">
+    <div class="key-ic" id="key-ic"></div>
+    <h1>Secret Key daalo</h1>
+    <p class="muted">Is device par pehli baar login hua hai. Wahi <b>shared Secret Key</b> daalo jo aapne aur dusre user ne set ki thi.</p>
+    <form id="key-form" novalidate>
+      <label class="fld"><span>Secret Key</span><input id="k-secret" type="password" autocomplete="off" maxlength="100" placeholder="Shared secret key"></label>
+      <label class="chk"><input id="k-remember" type="checkbox" checked><span>Is device par key yaad rakho</span></label>
+      <div id="key-err" class="err hidden" role="alert"></div>
+      <button id="key-submit" class="btn primary" type="submit"><span>Unlock chats</span><i class="spin"></i></button>
+      <button id="key-logout" class="btn ghost" type="button">Logout</button>
+    </form>
+  </div>
+</div>
+
+<!-- Connect error -->
+<div id="neterr" class="screen hidden">
+  <div class="auth-card center">
+    <div class="key-ic" id="neterr-ic"></div>
+    <h1>Connect nahi ho paya</h1>
+    <p class="muted" id="neterr-msg">Internet ya server check karo, phir dobara try karo.</p>
+    <button id="neterr-retry" class="btn primary" type="button"><span>Retry</span><i class="spin"></i></button>
+  </div>
+</div>
+
+<!-- Main app -->
+<div id="app" class="hidden">
+  <div id="conn-banner" class="conn-banner hidden">Connecting…</div>
+
+  <aside id="sidebar">
+    <header class="sb-head">
+      <button id="btn-me" class="avatar-btn" aria-label="Profile"></button>
+      <div class="sb-title">MyChat</div>
+      <div class="sb-actions">
+        <button id="btn-theme" class="icon-btn" aria-label="Toggle theme" title="Dark / Light"></button>
+        <button id="btn-starred" class="icon-btn" aria-label="Starred messages" title="Starred messages"></button>
+        <button id="btn-menu" class="icon-btn" aria-label="Menu" title="Menu"></button>
+      </div>
+    </header>
+    <div id="notif-banner" class="notif-banner hidden">
+      <div class="nb-ic" id="nb-ic"></div>
+      <div class="nb-txt"><b>Notifications on karo</b><span>Naye messages ka alert pao</span></div>
+      <button id="nb-on" class="btn small">Enable</button>
+      <button id="nb-x" class="icon-btn" aria-label="Dismiss"></button>
+    </div>
+    <div class="sb-search">
+      <div class="search-box"><span class="ic" id="sb-search-ic"></span><input id="sb-search" placeholder="Search or start new chat" autocomplete="off" spellcheck="false"><button id="sb-search-clear" class="icon-btn hidden" aria-label="Clear"></button></div>
+    </div>
+    <div id="chat-list" class="chat-list"></div>
+    <div class="sb-foot"><span id="sb-lock"></span> Your personal messages are end-to-end encrypted</div>
+  </aside>
+
+  <main id="main">
+    <section id="empty-state" class="empty-state">
+      <img src="icons/logo.svg" alt="" width="96" height="96">
+      <h2>MyChat Web</h2>
+      <p>Private chat, sirf aap dono ke liye.<br>Messages, photos aur files aapke device par encrypt hote hain.</p>
+      <div class="empty-lock"><span id="empty-lock"></span> End-to-end encrypted</div>
+    </section>
+
+    <section id="chat" class="chat hidden">
+      <header class="ch-head">
+        <button id="btn-back" class="icon-btn back" aria-label="Back"></button>
+        <button id="ch-info" class="ch-info" type="button">
+          <div id="ch-avatar" class="avatar"></div>
+          <div class="ch-text"><div id="ch-name" class="ch-name"></div><div id="ch-status" class="ch-status"></div></div>
+        </button>
+        <div class="ch-actions">
+          <button id="btn-search" class="icon-btn" aria-label="Search in chat" title="Search"></button>
+          <button id="btn-chmenu" class="icon-btn" aria-label="Menu" title="Menu"></button>
+        </div>
+      </header>
+
+      <div id="msg-search" class="msg-search hidden">
+        <button id="ms-close" class="icon-btn" aria-label="Close search"></button>
+        <div class="search-box"><span class="ic" id="ms-ic"></span><input id="ms-input" placeholder="Search in this chat" autocomplete="off" spellcheck="false"></div>
+        <span id="ms-count" class="ms-count"></span>
+        <button id="ms-up" class="icon-btn" aria-label="Previous"></button>
+        <button id="ms-down" class="icon-btn" aria-label="Next"></button>
+      </div>
+
+      <div id="msgs-wrap" class="msgs-wrap">
+        <div id="msgs" class="msgs" tabindex="-1"></div>
+        <button id="scroll-down" class="scroll-down hidden" aria-label="Scroll to latest"><span id="sd-ic"></span><b id="sd-count" class="hidden"></b></button>
+        <div id="drop-hint" class="drop-hint hidden">Files yaha chhodo</div>
+      </div>
+
+      <div id="reply-bar" class="reply-bar hidden"></div>
+
+      <footer id="composer" class="composer">
+        <div class="comp-row" id="comp-row">
+          <button id="btn-emoji" class="icon-btn" aria-label="Emoji"></button>
+          <div class="attach-wrap">
+            <button id="btn-attach" class="icon-btn" aria-label="Attach"></button>
+          </div>
+          <div class="input-wrap"><textarea id="input" rows="1" placeholder="Type a message" enterkeyhint="send" autocomplete="off" autocorrect="on"></textarea></div>
+          <button id="btn-send" class="send-btn" aria-label="Send"><span class="s-mic" id="s-mic"></span><span class="s-send" id="s-send"></span></button>
+        </div>
+        <div class="rec-row" id="rec-row">
+          <button id="rec-cancel" class="icon-btn" aria-label="Cancel recording"></button>
+          <div class="rec-dot"></div><div id="rec-time" class="rec-time">0:00</div>
+          <div class="rec-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <button id="rec-send" class="send-btn" aria-label="Send voice message"></button>
+        </div>
+        <div id="emoji-panel" class="emoji-panel"></div>
+      </footer>
+    </section>
+  </main>
+</div>
+
+<!-- Overlays -->
+<div id="overlay-root"></div>
+<div id="menu-root"></div>
+<div id="toast-root"></div>
+<input id="file-img" type="file" accept="image/*" multiple hidden>
+<input id="file-cam" type="file" accept="image/*" capture="environment" hidden>
+<input id="file-doc" type="file" multiple hidden>
+
+<script src="js/config.js"></script>
+<script src="js/util.js"></script>
+<script src="js/crypto.js"></script>
+<script src="js/api.js"></script>
+<script src="js/emoji.js"></script>
+<script src="js/app.js"></script>
+<script src="js/chat.js"></script>
+<script src="js/boot.js"></script>
+</body>
+</html>

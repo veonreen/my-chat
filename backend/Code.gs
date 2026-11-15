@@ -15,8 +15,8 @@ var MAX_USERS = 2;                       // private chat: sirf 2 log
 var SESSION_DAYS = 30;
 var EDIT_WINDOW_MS = 15 * 60 * 1000;     // edit only within 15 min (like WhatsApp)
 var MAX_UPLOAD_B64 = 9000000;            // ~6.5 MB raw file
-var PW_ROUNDS = 1000;
-var ONLINE_MS = 12000;                   // active in last 12s => "online"
+var PW_ROUNDS = 3;   // browser pehle PBKDF2 se password stretch karta hai; server pe salted SHA-256
+var ONLINE_MS = 25000;                   // active in last 25s => "online" (Apps Script latency variable hai)
 var TYPING_MS = 5000;
 var SETUP_VERSION = '1';
 var FOLDER_NAME = 'MyChat_Encrypted_Files';
@@ -82,10 +82,29 @@ function setup() {
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
+// Sheets kisi bhi text ko jo + = - @ se shuru ho (ya number jaisa dikhe) formula/number bana deta hai.
+// Isliye har free-form string ke aage '~' lagakar likhte hain, padhte waqt hata dete hain.
+function W_(v) { v = String(v == null ? '' : v); return v ? '~' + v : ''; }
+function R_(v) { v = String(v == null ? '' : v); return v.charAt(0) === '~' ? v.slice(1) : v; }
 function E_(code, msg) { var e = new Error(msg || code); e.code = code; return e; }
-function cache_() { return CacheService.getScriptCache(); }
-function ss_() { return SpreadsheetApp.openById(SHEET_ID); }
-function sheet_(name) { return ss_().getSheetByName(name); }
+// Cache keys ko sheet-ID ke hisaab se alag rakhte hain (test sheet / asli sheet mix na ho)
+function cache_() {
+  var c = CacheService.getScriptCache(), p = SHEET_ID.slice(0, 8) + ':';
+  return {
+    get: function (k) { return c.get(p + k); },
+    put: function (k, v, t) { c.put(p + k, v, t); },
+    remove: function (k) { c.remove(p + k); },
+    getAll: function (keys) {
+      var r = c.getAll(keys.map(function (k) { return p + k; })), o = {};
+      keys.forEach(function (k) { if (r[p + k] != null) o[k] = r[p + k]; });
+      return o;
+    }
+  };
+}
+// Ek execution me spreadsheet/sheets sirf ek baar kholo (har open ~1s leta hai)
+var SS_ = null, SH_ = {};
+function ss_() { return SS_ || (SS_ = SpreadsheetApp.openById(SHEET_ID)); }
+function sheet_(name) { return SH_[name] || (SH_[name] = ss_().getSheetByName(name)); }
 function bytesToHex_(b) {
   var s = '';
   for (var i = 0; i < b.length; i++) s += ('0' + (b[i] & 0xff).toString(16)).slice(-2);
@@ -135,7 +154,8 @@ function ensureSetup_(force) {
   var c = cache_();
   if (!force && c.get('setup_ok')) return;
   var props = PropertiesService.getScriptProperties();
-  if (!force && props.getProperty('setup_v') === SETUP_VERSION) { c.put('setup_ok', '1', 21600); return; }
+  var SV = 'setup_v_' + SHEET_ID;
+  if (!force && props.getProperty(SV) === SETUP_VERSION) { c.put('setup_ok', '1', 21600); return; }
   var ss = ss_();
   Object.keys(HEADERS).forEach(function (name) {
     var sh = ss.getSheetByName(name);
@@ -152,18 +172,18 @@ function ensureSetup_(force) {
   // old default empty "Sheet1" hata do (agar khali ho)
   var s1 = ss.getSheetByName('Sheet1');
   if (s1 && s1.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(s1);
-  props.setProperty('setup_v', SETUP_VERSION);
+  props.setProperty(SV, SETUP_VERSION);
   c.put('setup_ok', '1', 21600);
 }
 
 function getMeta_(key) {
   var sh = sheet_('Meta'), r = findRow_(sh, 1, key);
-  return r ? String(sh.getRange(r, 2).getValue()) : '';
+  return r ? R_(sh.getRange(r, 2).getValue()) : '';
 }
 function setMeta_(key, value) {
   var sh = sheet_('Meta'), r = findRow_(sh, 1, key);
-  if (r) sh.getRange(r, 2).setValue(String(value));
-  else sh.appendRow([key, String(value)]);
+  if (r) sh.getRange(r, 2).setValue(W_(value));
+  else sh.appendRow([key, W_(value)]);
 }
 
 function getFolder_() {
@@ -186,7 +206,7 @@ function authUser_(token) {
   var uid = c.get('s_' + th);
   if (!uid) {
     var sh = sheet_('Sessions');
-    var r = findRow_(sh, 1, th);
+    var r = findRow_(sh, 1, W_(th));
     if (!r) throw E_('auth');
     var row = sh.getRange(r, 1, 1, 5).getValues()[0];
     if (Number(row[3]) < Date.now()) { sh.deleteRow(r); throw E_('auth'); }
@@ -200,15 +220,15 @@ function createSession_(uid, ua) {
   var token = rnd_(64);
   var th = sha256hex_(token);
   var now = Date.now();
-  sheet_('Sessions').appendRow([th, uid, now, now + SESSION_DAYS * 86400000, String(ua || '').slice(0, 120)]);
+  sheet_('Sessions').appendRow([W_(th), uid, now, now + SESSION_DAYS * 86400000, String(ua || '').slice(0, 120)]);
   cache_().put('s_' + th, uid, 21600);
   return token;
 }
 
 function userOut_(row) {
   return {
-    uid: String(row[0]), username: String(row[1]),
-    nameEnc: String(row[4] || ''), aboutEnc: String(row[5] || ''), photoEnc: String(row[6] || ''),
+    uid: String(row[0]), username: R_(row[1]),
+    nameEnc: R_(row[4]), aboutEnc: R_(row[5]), photoEnc: R_(row[6]),
     created: Number(row[7]) || 0, lastSeen: Number(row[8]) || 0, profUpd: Number(row[9]) || 0
   };
 }
@@ -234,13 +254,13 @@ function signup_(req) {
   var pw = String(req.password || '');
   var proof = String(req.proof || '');
   if (!/^[a-z0-9_.]{3,20}$/.test(username)) throw E_('bad_username', 'Username 3-20 chars: a-z 0-9 _ .');
-  if (pw.length < 6 || pw.length > 100) throw E_('bad_password', 'Password kam se kam 6 characters ka rakho');
+  if (!/^[a-f0-9]{64}$/.test(pw)) throw E_('bad_password', 'Password format galat (app update karo)');
   if (!/^[a-f0-9]{64}$/.test(proof)) throw E_('bad_proof');
 
   return withLock_(function () {
     var users = sheet_('Users');
     if (getUidList_().length >= MAX_USERS) throw E_('full', 'Ye private chat hai, 2 users already hain');
-    if (findRow_(users, 2, username)) throw E_('exists', 'Ye username le liya gaya hai');
+    if (findRow_(users, 2, W_(username))) throw E_('exists', 'Ye username le liya gaya hai');
 
     var ph = sha256hex_(proof);
     var existing = getMeta_('proofHash');
@@ -256,7 +276,7 @@ function signup_(req) {
     var uid = 'u' + rnd_(10);
     var salt = rnd_(24);
     var now = Date.now();
-    users.appendRow([uid, username, salt, hashPassword_(salt, pw), '', '', '', now, now, now]);
+    users.appendRow([uid, W_(username), W_(salt), W_(hashPassword_(salt, pw)), '', '', '', now, now, now]);
     cache_().remove('uidl');
     bumpVer_(); cache_().put('pv', String(now), 21600);
     var row = users.getRange(users.getLastRow(), 1, 1, 10).getValues()[0];
@@ -273,9 +293,9 @@ function login_(req) {
   var c = cache_(), fk = 'lf_' + username;
   if (Number(c.get(fk) || 0) >= 8) throw E_('locked', 'Bahut galat attempts. 10 minute baad try karo');
   var sh = sheet_('Users');
-  var r = username ? findRow_(sh, 2, username) : 0;
+  var r = username ? findRow_(sh, 2, W_(username)) : 0;
   var row = r ? sh.getRange(r, 1, 1, 10).getValues()[0] : null;
-  if (!row || hashPassword_(String(row[2]), pw) !== String(row[3])) {
+  if (!row || hashPassword_(R_(row[2]), pw) !== R_(row[3])) {
     c.put(fk, String(Number(c.get(fk) || 0) + 1), 600);
     Utilities.sleep(400);
     throw E_('bad_login', 'Username ya password galat hai');
@@ -290,7 +310,7 @@ function login_(req) {
 
 function logout_(req, uid) {
   var th = sha256hex_(String(req.token));
-  var sh = sheet_('Sessions'), r = findRow_(sh, 1, th);
+  var sh = sheet_('Sessions'), r = findRow_(sh, 1, W_(th));
   if (r) sh.deleteRow(r);
   cache_().remove('s_' + th);
   cache_().remove('act_' + uid);
@@ -356,7 +376,7 @@ function typing_(req, uid) {
 function msgOut_(r, uid) {
   return {
     id: String(r[0]), ts: Number(r[1]), from: String(r[2]), to: String(r[3]), type: String(r[4]),
-    payload: String(r[5] || ''), status: Number(r[6]) || 0, dAt: Number(r[7]) || 0, sAt: Number(r[8]) || 0,
+    payload: R_(r[5]), status: Number(r[6]) || 0, dAt: Number(r[7]) || 0, sAt: Number(r[8]) || 0,
     edited: Number(r[9]) || 0, deleted: Number(r[10]) || 0,
     starred: String(r[11] || '').split(',').indexOf(uid) >= 0 ? 1 : 0,
     upd: Number(r[12]) || 0, reply: String(r[13] || ''), fileId: String(r[14] || '')
@@ -479,7 +499,7 @@ function send_(req, uid) {
       fsh.getRange(fr, 5).setValue(to);
     }
     var now = Date.now();
-    var row = [id, now, uid, to, type, payload, 0, '', '', 0, 0, '', now, replyId, type === 'text' ? '' : fileId];
+    var row = [id, now, uid, to, type, W_(payload), 0, '', '', 0, 0, '', now, replyId, type === 'text' ? '' : fileId];
     sh.appendRow(row);
     cache_().remove('ty_' + uid);
     bumpVer_();
@@ -497,10 +517,10 @@ function edit_(req, uid) {
     if (String(row[2]) !== uid || String(row[4]) !== 'text' || Number(row[10])) throw E_('forbidden');
     if (Date.now() - Number(row[1]) > EDIT_WINDOW_MS) throw E_('too_late', 'Edit sirf 15 minute tak ho sakta hai');
     var now = Date.now();
-    sh.getRange(r, 6).setValue(payload);
+    sh.getRange(r, 6).setValue(W_(payload));
     sh.getRange(r, 10).setValue(1);
     sh.getRange(r, 13).setValue(now);
-    row[5] = payload; row[9] = 1; row[12] = now;
+    row[5] = W_(payload); row[9] = 1; row[12] = now;
     bumpVer_();
     return { ok: true, msg: msgOut_(row, uid) };
   });
@@ -554,9 +574,9 @@ function profile_(req, uid) {
     var sh = sheet_('Users'), r = findRow_(sh, 1, uid);
     if (!r) throw E_('not_found');
     function chk(v, max) { v = String(v); if (v.length > max) throw E_('too_big', 'Data bahut bada hai'); return v; }
-    if (req.nameEnc !== undefined) sh.getRange(r, 5).setValue(chk(req.nameEnc, 2000));
-    if (req.aboutEnc !== undefined) sh.getRange(r, 6).setValue(chk(req.aboutEnc, 4000));
-    if (req.photoEnc !== undefined) sh.getRange(r, 7).setValue(chk(req.photoEnc, 45000));
+    if (req.nameEnc !== undefined) sh.getRange(r, 5).setValue(W_(chk(req.nameEnc, 2000)));
+    if (req.aboutEnc !== undefined) sh.getRange(r, 6).setValue(W_(chk(req.aboutEnc, 4000)));
+    if (req.photoEnc !== undefined) sh.getRange(r, 7).setValue(W_(chk(req.photoEnc, 45000)));
     var now = Date.now();
     sh.getRange(r, 10).setValue(now);
     cache_().put('pv', String(now), 21600);
@@ -586,3 +606,4 @@ function file_(req, uid) {
   var bytes = DriveApp.getFileById(String(row[1])).getBlob().getBytes();
   return { ok: true, data: Utilities.base64Encode(bytes) };
 }
+

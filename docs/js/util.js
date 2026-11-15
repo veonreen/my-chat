@@ -114,9 +114,11 @@
   u.fillAvatar = (el, user) => {
     el.classList.add('avatar');
     el.textContent = '';
-    if (user && user.photo) {
+    if (user && user.photo && /^data:image\//.test(user.photo)) {
       const img = document.createElement('img');
-      img.src = user.photo; img.alt = ''; img.draggable = false;
+      img.alt = ''; img.draggable = false;
+      img.onerror = () => u.fillAvatar(el, Object.assign({}, user, { photo: '' }));  // toota photo => initials
+      img.src = user.photo;
       el.append(img); el.style.background = '';
     } else {
       const name = (user && (user.name || user.username)) || '?';

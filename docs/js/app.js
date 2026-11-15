@@ -142,7 +142,7 @@
   async function decUserSafe(raw) { return { uid: raw.uid, username: raw.username, name: raw.username, about: '', photo: '' }; }
 
   async function login(username, password) {
-    const r = await api.call('login', { username, password, ua: navigator.userAgent.slice(0, 100) });
+    const r = await api.call('login', { username, password: await C.pwHash(username, password), ua: navigator.userAgent.slice(0, 100) });
     return afterAuth(r, null);
   }
 
@@ -157,7 +157,7 @@
       key = await C.deriveKey(secret, ksalt);
       kc = await C.makeKc(key);
     }
-    const r = await api.call('signup', { username, password, proof, ksalt, kc, ua: navigator.userAgent.slice(0, 100) });
+    const r = await api.call('signup', { username, password: await C.pwHash(username, password), proof, ksalt, kc, ua: navigator.userAgent.slice(0, 100) });
     if (!key) {
       key = await C.deriveKey(secret, r.ksalt);
       if (!(await C.verifyKc(key, r.kc))) throw new api.ApiError('wrong_key', 'Secret Key galat hai');
@@ -227,6 +227,7 @@
   async function pollTick() {
     if (polling) return;
     polling = true;
+    const t0 = Date.now();
     try {
       await pollOnce();
       failCount = 0;
@@ -237,7 +238,8 @@
       if (failCount >= 2 && MC.ui) MC.ui.setConn(false);
     } finally {
       polling = false;
-      const wait = again ? 150 : document.hidden ? 8000 : failCount ? Math.min(12000, 2500 * (failCount + 1)) : 2500;
+      const rtt = Date.now() - t0;
+      const wait = again ? 100 : document.hidden ? 8000 : failCount ? Math.min(12000, 2500 * (failCount + 1)) : Math.max(400, 2500 - rtt);
       again = false;
       schedulePoll(wait);
     }

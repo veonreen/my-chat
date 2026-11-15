@@ -40,6 +40,14 @@
     return hex(bits);
   }
 
+  /** Password ko browser me stretch karo (PBKDF2). Server ko asli password kabhi nahi milta. */
+  async function pwHash(username, password) {
+    const base = await baseKey(password);
+    const bits = await subtle.deriveBits(
+      { name: 'PBKDF2', salt: enc.encode('mychat-pw-v1:' + String(username).toLowerCase()), iterations: 120000, hash: 'SHA-256' }, base, 256);
+    return hex(bits);
+  }
+
   const randSalt = () => b64e(crypto.getRandomValues(new Uint8Array(16)));
 
   async function encBytes(key, u8, aad) {
@@ -105,5 +113,5 @@
     } catch (e) { /* ignore */ }
   }
 
-  MC.cr = { b64e, b64d, deriveKey, proof, randSalt, encBytes, decBytes, encStr, decStr, makeKc, verifyKc, saveKey, loadKey, delKey };
+  MC.cr = { b64e, b64d, deriveKey, proof, pwHash, randSalt, encBytes, decBytes, encStr, decStr, makeKc, verifyKc, saveKey, loadKey, delKey };
 })();

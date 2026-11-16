@@ -131,7 +131,7 @@ my-chat/
 git add -A && git commit -m "change" && git push
 ```
 1-2 minute me GitHub Pages par live.
-**Naya version sab devices par bhejna ho to:**  me  aur  me  badlo. Service worker purana cache delete karke naya laata hai, aur har file  se revalidate hoti hai, to GitHub Pages ka 10 min cache bhi purana nahi dikhata.
+**Naya version sab devices par bhejna ho to:** `docs/sw.js` me `CACHE = 'mychat-vN'` aur `docs/js/config.js` me `MYCHAT_VERSION` badlo. Service worker purana cache delete karke naya laata hai, aur har file `no-cache` se revalidate hoti hai, to GitHub Pages ka 10 min cache bhi purana nahi dikhata.
 
 **Backend badalna hai** (`server/`):
 ```bash
@@ -181,7 +181,7 @@ node test/push.js    # 9 checks: Web Push (mock push service)
 | "Ye private chat hai, 2 users already hain" | Limit 2 users ki hai (`MAX_USERS` in `server/server.js`) |
 | Har baar login screen aati hai | Ye App Lock hai, jaan-boojh kar. Chahe to Settings me dekho: lock sirf band/1-min background par hota hai |
 | Login ke baad Secret Key poochta hai | Vault nahi mila (logout kiya tha, ya "Secret Key dobara daalo" dabaya). Daalo aur "yaad rakho" tick rakho |
-| Dono phones par purana version | Settings ke neeche "MyChat v..." dekho (abhi 2.1.0). Purana ho to app band karke kholo; service worker  cache naya version le aata hai |
+| Dono phones par purana version | Settings ke neeche "MyChat v..." dekho (abhi 2.1.0). Purana ho to app band karke kholo; service worker ka `mychat-v3` cache naya version le aata hai |
 | App band hone par notification nahi | Settings → Notifications on? Browser permission allow? iPhone par pehle "Add to Home Screen" zaroori hai |
 | "Bahut zyada requests" | Rate limit laga hai, thodi der ruko |
 | Naya user chahiye / sab reset | Pehle backup lo, phir `data/mychat.db` ke `users, messages, sessions, files, push_subs` tables khali karo aur `meta` me `proofHash, ksalt, kc` hatao (VAPID keys mat hatao) |

@@ -20,6 +20,7 @@ v2 me polling hata di gayi: ab **WebSocket (Socket.io)** hai, to message ~**0.07
    Galat key daaloge to server signup hi nahi karne dega ✅. Teesra insaan kabhi signup nahi kar sakta.
 4. Mobile par: Chrome me menu → **"Install app" / "Add to Home screen"**.
 5. Settings → **Notifications** on karo. Iske baad app band hone par bhi notification aayega (Web Push).
+6. **App Lock (v2.1):** app band karke dobara khologe to har baar login screen aayegi (username + password). Secret Key dobara nahi poochi jaati, wo password se khul jaati hai. Neeche "App Lock" section padho.
 
 > ⚠️ **Secret Key bhool gaye to purane messages wapas nahi aa sakte.** Isko kahin safe likh lo
 > (par chat me mat daalo). Dono users ko ye key kisi aur raaste se (phone par, mil kar) batao.
@@ -58,6 +59,7 @@ PC → internet → VPS (Traefik, HTTPS/WSS) → PC, 40 messages:
 | Documents | gzip compress + encrypt, max ~6 MB |
 | Voice messages | Mic button dabao, record karo, bhejo |
 | Emoji, links, search | Emoji panel, clickable links, sidebar + chat ke andar search |
+| **App Lock** | Tab/app band karke kholo, ya 1 minute se zyada background me raho => auto-lock, login screen. Menu → "Lock app" se manual lock. Unlock = username + password |
 | Notifications | App khula ho to sound + notification. **App band ho to Web Push (VAPID)** |
 | Dark / Light | Upar 🌙 button, ya Settings me "System" |
 | PWA | Install kar sakte ho, shell offline khulta hai |
@@ -74,6 +76,14 @@ PC → internet → VPS (Traefik, HTTPS/WSS) → PC, 40 messages:
 - **Server ko plain dikhta hai:** username, kisne kisko bheja, kab bheja, ticks status, file ka size. "Kya likha" nahi dikhta, "kab aur kitna" dikh sakta hai.
 - **Web Push me message ka text nahi hota** (server ko pata hi nahi). Sirf "🔒 Naya message" + sender ka username jaata hai.
 - Signup par server ko Secret Key ka alag **derived proof (hash)** milta hai taaki bahari insaan 2nd user na ban sake. **Isliye lambi key rakho.**
+
+**App Lock (v2.1) — kaise kaam karta hai**
+- **Session token sirf memory me** rehta hai (JS variable). localStorage / IndexedDB me **save nahi** hota. Isliye tab/app band karte hi token chala jata hai.
+- **Secret Key ek "vault" me**, jo tumhare **login password se encrypt** hota hai (PBKDF2-SHA256 250k rounds + AES-GCM, random salt). Login karte hi wahi password vault kholta hai, to Secret Key har baar nahi daalni padti. Password ke bina vault nahi khulta.
+- **Auto-lock:** app 1 minute se zyada background me raha, ya laptop sleep se jaga => memory saaf (page reload) aur login screen. Background me jaate hi chat blur ho jata hai (app-switcher me dikhe nahi).
+- **Lock != Logout.** Lock par vault bacha rehta hai (sirf password se khulta hai) aur **push subscription bachi rehti hai**, isliye notifications chalte rahte hain (unme message text hota hi nahi). **Logout** par vault, saved key, settings, notifications, push subscription sab is device se hat jata hai; dobara login par Secret Key daalni padegi.
+- **Dhyan:** vault ka password-strength tumhare password par tika hai. Device kisi ke haath lag jaye to kamzor password brute-force ho sakta hai, isliye lamba password rakho. Sirf tab band/reload karne par browser server ko bata nahi sakta, to server par wo session bacha reh jata hai (par token browser me hai hi nahi, aur server max 5 sessions rakhta hai, 30 din me expire).
+- Purane v2.0 ne token/key bina password ke rakhi thi: v2.1 pehle load par unhe hata deta hai. Update ke baad **ek baar Secret Key daalni padegi**, phir wo vault me yaad rahegi.
 
 **Server (VPS) hardening**
 - **UFW firewall:** sirf ports 22, 80, 443 khule (naye).
@@ -121,6 +131,7 @@ my-chat/
 git add -A && git commit -m "change" && git push
 ```
 1-2 minute me GitHub Pages par live.
+**Naya version sab devices par bhejna ho to:**  me  aur  me  badlo. Service worker purana cache delete karke naya laata hai, aur har file  se revalidate hoti hai, to GitHub Pages ka 10 min cache bhi purana nahi dikhata.
 
 **Backend badalna hai** (`server/`):
 ```bash
@@ -168,6 +179,9 @@ node test/push.js    # 9 checks: Web Push (mock push service)
 | "Secret Key galat hai" | Dono users ki key bilkul same honi chahiye (capital/small letters bhi) |
 | 🔒 "Message decrypt nahi ho paya" | Is device par galat Secret Key hai. Settings → "Secret Key dobara daalo" |
 | "Ye private chat hai, 2 users already hain" | Limit 2 users ki hai (`MAX_USERS` in `server/server.js`) |
+| Har baar login screen aati hai | Ye App Lock hai, jaan-boojh kar. Chahe to Settings me dekho: lock sirf band/1-min background par hota hai |
+| Login ke baad Secret Key poochta hai | Vault nahi mila (logout kiya tha, ya "Secret Key dobara daalo" dabaya). Daalo aur "yaad rakho" tick rakho |
+| Dono phones par purana version | Settings ke neeche "MyChat v..." dekho (abhi 2.1.0). Purana ho to app band karke kholo; service worker  cache naya version le aata hai |
 | App band hone par notification nahi | Settings → Notifications on? Browser permission allow? iPhone par pehle "Add to Home Screen" zaroori hai |
 | "Bahut zyada requests" | Rate limit laga hai, thodi der ruko |
 | Naya user chahiye / sab reset | Pehle backup lo, phir `data/mychat.db` ke `users, messages, sessions, files, push_subs` tables khali karo aur `meta` me `proofHash, ksalt, kc` hatao (VAPID keys mat hatao) |

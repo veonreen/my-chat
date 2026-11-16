@@ -62,6 +62,16 @@
       return api._http(body, timeout);
     },
 
+    /** Jawab ka intezaar kiye bina bhejo (page reload ke baad bhi request poori hoti hai). App-lock ke session-invalidate ke liye. */
+    beacon(action, data) {
+      try {
+        fetch(api.base() + '/api', {
+          method: 'POST', keepalive: true, headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(Object.assign({ action, token: api.token }, data || {})),
+        }).catch(() => {});
+      } catch (e) { /* ignore */ }
+    },
+
     _rpc(body, timeout) {
       return new Promise((resolve, reject) => {
         api.socket.timeout(timeout).emit('rpc', body, (err, j) => {

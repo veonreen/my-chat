@@ -127,23 +127,38 @@
     return added;
   }
 
-  // ================= Auth =================
-  async function afterAuth(r, key) {
+  // ================= Auth + App Lock =================
+  // - Session token SIRF memory me (api.token). localStorage/IndexedDB me nahi => tab band = login dobara.
+  // - Secret Key login-password se encrypted "vault" me (crypto.js). Login par password se khulta hai.
+  // - Lock  = memory saaf (page reload), vault bacha rehta hai, push subscription bachi rehti hai.
+  // - Logout = vault + sab local data + push subscription sab hata do.
+  const LOCK_AFTER_MS = 60 * 1000;
+  let pendingPw = null;      // Secret Key screen par vault banane ke liye password (kaam ke baad turant hata dete hain)
+
+  async function afterAuth(r, o) {
     api.token = r.token;
     S.uid = r.uid; S.ksalt = r.ksalt; S.kc = r.kc;
     S.me = await decUserSafe(r.me);
-    LS.set('mychat.session', { token: r.token, uid: r.uid, username: r.me.username, ksalt: r.ksalt, kc: r.kc });
-    if (!key) key = await C.loadKey(r.uid, r.ksalt);
-    if (!key) return 'need_key';
+    const username = r.me.username;
+    let key = o.key || null;
+    if (!key) {
+      const secret = await C.vaultOpen(username, o.password);          // password se vault kholo
+      if (secret) {
+        const k = await C.deriveKey(secret, r.ksalt);
+        if (await C.verifyKc(k, r.kc)) key = k; else C.vaultClear();   // purani/galat vault
+      }
+    } else if (o.secret) {
+      await C.vaultSave(username, o.password, o.secret);               // signup: turant vault bana do
+    }
+    if (!key) { pendingPw = o.password; return 'need_key'; }
     S.key = key;
-    if (LS.get('mychat.remember', true) !== false) await C.saveKey(S.uid, key, S.ksalt);
     return 'ok';
   }
   async function decUserSafe(raw) { return { uid: raw.uid, username: raw.username, name: raw.username, about: '', photo: '' }; }
 
   async function login(username, password) {
     const r = await api.call('login', { username, password: await C.pwHash(username, password), ua: navigator.userAgent.slice(0, 100) });
-    return afterAuth(r, null);
+    return afterAuth(r, { password });
   }
 
   async function signup({ username, password, name, secret }) {
@@ -162,47 +177,69 @@
       key = await C.deriveKey(secret, r.ksalt);
       if (!(await C.verifyKc(key, r.kc))) throw new api.ApiError('wrong_key', 'Secret Key galat hai');
     }
-    const st = await afterAuth(r, key);
-    // naam encrypt karke save
+    const st = await afterAuth(r, { key, secret, password });
     if (name) { try { await saveProfile({ name }); } catch (e) { /* baad me profile se set kar sakte */ } }
     return st;
   }
 
+  /** Vault nahi mila => Secret Key haath se daali. remember=true => password se encrypt karke vault me rakho. */
   async function unlock(secret, remember) {
     const key = await C.deriveKey(secret, S.ksalt);
     if (!(await C.verifyKc(key, S.kc))) throw new api.ApiError('wrong_key', 'Secret Key galat hai');
-    LS.set('mychat.remember', !!remember);
     S.key = key;
-    if (remember) await C.saveKey(S.uid, key, S.ksalt);
+    if (remember && pendingPw) await C.vaultSave(S.me.username, pendingPw, secret); else if (!remember) C.vaultClear();
+    pendingPw = null;
   }
 
-  /** Page reload par purana session wapas lao. Returns 'none' | 'need_key' | 'ok'. */
+  /** Sirf "Retry" (net error) ke liye: memory me login ho chuka ho to wahi se aage badho. Disk se kabhi restore nahi. */
   async function restore() {
-    const ses = LS.get('mychat.session', null);
-    if (!ses || !ses.token) return 'none';
-    api.token = ses.token; S.uid = ses.uid; S.ksalt = ses.ksalt; S.kc = ses.kc;
-    S.me = { uid: ses.uid, username: ses.username, name: ses.username, about: '', photo: '' };
-    const key = await C.loadKey(ses.uid, ses.ksalt);
-    if (!key) return 'need_key';
-    S.key = key;
-    return 'ok';
+    if (api.token && S.uid && S.key) return 'ok';
+    if (api.token && S.uid) return 'need_key';
+    return 'none';
   }
 
-  function cleanupAndReload() {
-    S.running = false; api.disconnect();
-    if (LS.get('mychat.remember', true) === false && S.uid) C.delKey(S.uid);
-    LS.del('mychat.session');
+  const flash = (msg) => { try { if (msg) sessionStorage.setItem('mychat.flash', msg); } catch (e) { /* ignore */ } };
+  let locking = false;
+  /** App lock: memory saaf (reload), server par session invalid par push subscription RAHEGI => notifications chalte rahenge. */
+  function lock(msg, opts) {
+    if (locking) return; locking = true;
+    S.running = false;
+    if (api.token && !(opts && opts.skipServer)) api.beacon('logout', { keepPush: true });
+    api.disconnect(); api.token = null; pendingPw = null;
+    flash(msg || 'App lock ho gaya. Dobara login karo.');
     location.reload();
   }
+  const lockNow = () => lock('App lock ho gaya. Unlock karne ke liye login karo.');
+  const forceLogout = (msg) => lock(msg || 'Session expire ho gaya. Dobara login karo.', { skipServer: true });
+
+  /** Poora logout: push band, server session delete, vault/key/settings sab local data saaf. */
   async function logout() {
+    S.running = false;
     try { await dropPush(); } catch (e) { /* ignore */ }
     try { await api.call('logout', {}, { timeout: 6000 }); } catch (e) { /* ignore */ }
-    cleanupAndReload();
+    api.disconnect(); api.token = null; pendingPw = null;
+    await C.wipeLocal();
+    location.reload();
   }
-  function forceLogout(msg) {
-    if (msg) LS.set('mychat.flash', msg);
-    cleanupAndReload();
-  }
+  /** Settings: "Secret Key dobara daalo" => vault hatao aur lock karo (agle login par Secret Key poochega). */
+  function forgetKey() { C.vaultClear(); lock('Secret Key hata di. Login karke dobara daalo.'); }
+
+  // ---- Auto-lock: background 1 min+ / sleep / app band ----
+  let hiddenAt = 0, lockTimer = null, lastTick = Date.now();
+  const LOCK_MSG = 'App 1 minute se zyada background me tha, isliye lock ho gaya. Dobara login karo.';
+  function checkLock() { if (S.running && hiddenAt && Date.now() - hiddenAt >= LOCK_AFTER_MS) lock(LOCK_MSG); }
+  document.addEventListener('visibilitychange', () => {
+    clearTimeout(lockTimer);
+    document.body.classList.toggle('privacy', document.hidden);          // app-switcher me chat blur
+    if (document.hidden) { hiddenAt = Date.now(); lockTimer = setTimeout(checkLock, LOCK_AFTER_MS + 300); }
+    else { checkLock(); hiddenAt = 0; }
+  });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) checkLock(); });
+  setInterval(() => {                                                    // laptop sleep / frozen tab detect
+    const n = Date.now();
+    if (S.running && n - lastTick > LOCK_AFTER_MS + 5000) lock(LOCK_MSG);
+    lastTick = n;
+  }, 5000);
 
   // ================= Sync & realtime (Socket.io) =================
   // Ab polling nahi: server naya message / tick / typing / online turant PUSH karta hai.
@@ -338,9 +375,16 @@
       }
     }
   }
+  // Notification click: app unlock hai to chat kholo, locked hai to login ke baad kholo
+  let pendingPeer = null;
+  try {
+    const q = new URLSearchParams(location.search).get('peer');
+    if (q) { pendingPeer = q; history.replaceState(null, '', location.pathname); }
+  } catch (e) { /* ignore */ }
+  const openPending = () => { if (pendingPeer && MC.ui && MC.ui.ready && S.users.has(pendingPeer)) { MC.ui.openChat(pendingPeer); pendingPeer = null; } };
   if (navigator.serviceWorker) {
     navigator.serviceWorker.addEventListener('message', (e) => {
-      if (e.data && e.data.type === 'open-chat' && MC.ui && MC.ui.ready) MC.ui.openChat(e.data.peer);
+      if (e.data && e.data.type === 'open-chat') { pendingPeer = e.data.peer; openPending(); }
     });
   }
 
@@ -591,10 +635,12 @@
     await fullSync();
     S.running = true;
     MC.ui.start();
+    try { history.replaceState(history.state, '', location.pathname + location.search + '#u'); } catch (e) { /* ignore */ }   // SW ko pata chale: app unlocked
     MC.ui.setConn(true);
     updateTitle();
     catchUp();                      // sync ke dauran aaye events na chhute
     setupPush();
+    openPending();
   }
   function retry(m) { if (m.failed && m._send) { enqueue(m); MC.ui.msgChanged(m); } }
 
@@ -606,7 +652,7 @@
 
   MC.core = {
     applyTheme, setTheme, saveSettings, resolvedTheme,
-    login, signup, unlock, restore, logout, forceLogout, startApp, afterAuth,
+    login, signup, unlock, restore, logout, forceLogout, lockNow, forgetKey, startApp, afterAuth,
     sendText, sendFiles, recStart, recStop, retry, editMsg, deleteMsg, starMsg, loadOlder, saveProfile,
     getFileUrl, downloadFile, preview, unreadCount, totalUnread, lastMsg, canEdit, nameOf, peerOf,
     clearReply, clearEdit, markTyping, pollNow, askNotif, setupPush, dropPush, refreshUI, isActive, updateTitle, mergeMsgs,

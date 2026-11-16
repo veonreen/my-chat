@@ -818,14 +818,18 @@
         core.saveSettings(); maybeNotifBanner();
       }),
       sw('Message sounds', 'Send / receive tone', () => S.settings.sound, async (on) => { S.settings.sound = on; core.saveSettings(); if (on) { u.unlockAudio(); u.beep('in'); } }),
-      h('div', { class: 'set-sec' }, 'Privacy & security'),
-      h('button', { class: 'set-btn', onclick: () => confirmBox({ title: 'Secret Key badalni hai?', text: 'Is device se key hat jayegi. Wahi Secret Key dobara daalni padegi.', ok: 'Continue' }).then(async (y) => { if (y) { await MC.cr.delKey(S.uid); location.reload(); } }) },
-        h('span', { html: u.ic('key') }), h('div', {}, h('div', {}, 'Secret Key dobara daalo'), h('div', { class: 'muted small' }, 'Is device se key hatao'))),
+      h('div', { class: 'set-sec' }, 'App Lock & security'),
+      h('div', { class: 'muted small pad' }, 'App band karke kholne par, ya 1 minute se zyada background me rehne par app lock ho jata hai. Unlock = username + password. Secret Key tumhare password se encrypt hokar is device par rakhi hai.'),
+      h('button', { class: 'set-btn', onclick: () => core.lockNow() },
+        h('span', { html: u.ic('lock') }), h('div', {}, h('div', {}, 'Lock app abhi'), h('div', { class: 'muted small' }, 'Notifications chalte rahenge'))),
+      h('button', { class: 'set-btn', onclick: () => confirmBox({ title: 'Secret Key badalni hai?', text: 'Is device se saved key hat jayegi. Login ke baad wahi Secret Key dobara daalni padegi.', ok: 'Continue' }).then((y) => { if (y) core.forgetKey(); }) },
+        h('span', { html: u.ic('key') }), h('div', {}, h('div', {}, 'Secret Key dobara daalo'), h('div', { class: 'muted small' }, 'Is device se saved key hatao'))),
     ];
     if (ui.installEvt) rows.push(h('button', { class: 'set-btn', onclick: async () => { ui.installEvt.prompt(); ui.installEvt = null; } }, h('span', { html: u.ic('download') }), h('div', {}, h('div', {}, 'Install MyChat app'), h('div', { class: 'muted small' }, 'Home screen par add karo'))));
     else if (/iphone|ipad/i.test(navigator.userAgent) && !window.navigator.standalone) rows.push(h('div', { class: 'muted small pad' }, 'iPhone: Safari me Share ⬆ → "Add to Home Screen" se app install karo.'));
-    rows.push(h('button', { class: 'set-btn danger', onclick: () => confirmBox({ title: 'Log out?', text: 'Aap logout ho jaoge.', ok: 'Log out', danger: true }).then((y) => { if (y) core.logout(); }) },
+    rows.push(h('button', { class: 'set-btn danger', onclick: () => confirmBox({ title: 'Log out?', text: 'Logout par is device se saved Secret Key, notifications aur baaki sab local data hat jayega. Dobara login par Secret Key daalni padegi.', ok: 'Log out', danger: true }).then((y) => { if (y) core.logout(); }) },
       h('span', { html: u.ic('logout') }), h('div', {}, 'Log out')));
+    rows.push(h('div', { class: 'muted small pad' }, 'MyChat v' + (window.MYCHAT_VERSION || '?')));
     openModal({ title: 'Settings', cls: 'tall', body: [h('div', { class: 'set-list' }, rows)] });
   }
 
@@ -841,7 +845,8 @@
         { icon: 'person', label: 'Profile', fn: openProfile },
         { icon: 'star', label: 'Starred messages', fn: openStarred },
         { icon: 'settings', label: 'Settings', fn: openSettings },
-        { icon: 'logout', label: 'Log out', danger: true, fn: () => confirmBox({ title: 'Log out?', text: 'Aap logout ho jaoge.', ok: 'Log out', danger: true }).then((y) => { if (y) core.logout(); }) },
+        { icon: 'lock', label: 'Lock app', fn: () => core.lockNow() },
+        { icon: 'logout', label: 'Log out', danger: true, fn: () => confirmBox({ title: 'Log out?', text: 'Logout par is device ka saved Secret Key aur sab local data hat jayega.', ok: 'Log out', danger: true }).then((y) => { if (y) core.logout(); }) },
       ], { x: r.right, y: r.bottom + 4, right: true });
     });
     el.nbOn.addEventListener('click', async () => { await core.askNotif(); maybeNotifBanner(); });

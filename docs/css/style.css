@@ -24,6 +24,7 @@ input, textarea { font: inherit; color: inherit; }
 a { color: #027eb5; }
 :root[data-theme="dark"] a { color: #53bdeb; }
 .hidden { display: none !important; }
+body.privacy #app { filter: blur(22px); }   /* app background me ho to chat blur (app-switcher snapshot) */
 .muted { color: var(--text2); }
 .small { font-size: 12.5px; }
 .pad { padding: 8px 20px; }

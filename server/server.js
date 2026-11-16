@@ -24,6 +24,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://veonreen.github.io').split(',').map((s) => s.trim()).filter(Boolean);
 const MAX_USERS = Number(process.env.MAX_USERS) || 2;
 const SESSION_MS = 30 * 86400000;
+const MAX_SESSIONS = 5;                 // ek user ke max itne active session (naye aane par sabse purane hat'te hain)
 const EDIT_WINDOW_MS = 15 * 60 * 1000;
 const MAX_UPLOAD_B64 = 9000000;
 const MAX_PAYLOAD = 45000;
@@ -94,6 +95,7 @@ const q = {
   subDel: db.prepare('DELETE FROM push_subs WHERE endpoint=?'),
   subDelUid: db.prepare('DELETE FROM push_subs WHERE uid=?'),
   purgeSessions: db.prepare('DELETE FROM sessions WHERE expires<?'),
+  trimSessions: db.prepare('DELETE FROM sessions WHERE uid=? AND tokenHash NOT IN (SELECT tokenHash FROM sessions WHERE uid=? ORDER BY created DESC LIMIT ?)'),
 };
 
 // ====== VAPID (Web Push keys; ek baar ban ke DB me rehti hain) ======
@@ -233,6 +235,7 @@ function authToken(token) {
 function createSession(uid, ua) {
   const token = rnd(64), now = Date.now();
   q.insSession.run(sha256(token), uid, now, now + SESSION_MS, String(ua || '').slice(0, 120));
+  q.trimSessions.run(uid, uid, MAX_SESSIONS);       // token sirf memory me hota hai => band tab ke orphan sessions jama na hon
   return token;
 }
 
@@ -284,7 +287,7 @@ const PUBLIC = {
 const ACTIONS = {
   logout(req, ctx) {
     q.delSession.run(sha256(ctx.token));
-    q.subDelUid.run(ctx.uid);
+    if (!req.keepPush) q.subDelUid.run(ctx.uid);      // keepPush = App Lock (notifications chalte rahein); warna asli logout
     return { ok: true };
   },
   users() { return { ok: true, users: q.allUsers.all().map(userOut), pv: getPv() }; },

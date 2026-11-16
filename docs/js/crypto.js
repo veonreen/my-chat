@@ -73,45 +73,53 @@
     try { return (await decStr(key, kc, 'kc')) === KC_TEXT; } catch (e) { return false; }
   }
 
-  // ---- Key ko is device (IndexedDB) me rakhna: non-extractable CryptoKey ----
-  function idb() {
-    return new Promise((res, rej) => {
-      const r = indexedDB.open('mychat', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('keys');
-      r.onsuccess = () => res(r.result);
-      r.onerror = () => rej(r.error);
-    });
-  }
-  async function saveKey(id, key, ksalt) {
+  // ---- Secret Key "vault": Secret Key ko LOGIN PASSWORD se encrypt karke is device par rakhna ----
+  // PBKDF2(password, random salt) -> AES-GCM key -> encrypt(Secret Key). Password ke bina vault khulta nahi.
+  // Server ko vault ya password ka koi hissa nahi milta (server ka password-hash alag salt/purpose se bana hai).
+  const VAULT = 'mychat.vault';
+  const vaultAad = (username) => 'mychat-vault-v1:' + String(username).toLowerCase();
+  const vaultKey = async (password, salt, iter) =>
+    subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iter, hash: 'SHA-256' }, await baseKey(password), { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+
+  async function vaultSave(username, password, secret) {
     try {
-      const db = await idb();
-      await new Promise((res, rej) => {
-        const tx = db.transaction('keys', 'readwrite');
-        tx.objectStore('keys').put({ key, ksalt }, id);
-        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
-      });
-    } catch (e) { /* private mode etc. */ }
+      const salt = crypto.getRandomValues(new Uint8Array(16)), iter = 250000;
+      const ct = await encBytes(await vaultKey(password, salt, iter), enc.encode(String(secret)), vaultAad(username));
+      localStorage.setItem(VAULT, JSON.stringify({ v: 1, u: String(username).toLowerCase(), s: b64e(salt), i: iter, d: b64e(ct) }));
+      return true;
+    } catch (e) { return false; }
   }
-  async function loadKey(id, ksalt) {
+  /** Sahi password + sahi username ho to Secret Key (string) wapas, warna null. */
+  async function vaultOpen(username, password) {
     try {
-      const db = await idb();
-      const v = await new Promise((res, rej) => {
-        const rq = db.transaction('keys').objectStore('keys').get(id);
-        rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error);
-      });
-      return v && v.ksalt === ksalt ? v.key : null;
+      const v = JSON.parse(localStorage.getItem(VAULT) || 'null');
+      if (!v || v.v !== 1 || v.u !== String(username).toLowerCase()) return null;
+      const iter = Math.min(1000000, Math.max(100000, Number(v.i) || 250000));
+      return dec.decode(await decBytes(await vaultKey(password, b64d(v.s), iter), b64d(v.d), vaultAad(username)));
     } catch (e) { return null; }
   }
-  async function delKey(id) {
+  const vaultClear = () => { try { localStorage.removeItem(VAULT); } catch (e) { /* ignore */ } };
+  const hasVault = () => { try { return !!localStorage.getItem(VAULT); } catch (e) { return false; } };
+
+  /** Logout par: is app ka sara local data hatao (sirf 'mychat.*' keys: github.io origin dusre projects ke saath shared hota hai). */
+  async function wipeLocal() {
+    for (const st of [localStorage, sessionStorage]) {
+      try { Object.keys(st).filter((k) => k.indexOf('mychat.') === 0).forEach((k) => st.removeItem(k)); } catch (e) { /* ignore */ }
+    }
     try {
-      const db = await idb();
-      await new Promise((res) => {
-        const tx = db.transaction('keys', 'readwrite');
-        tx.objectStore('keys').delete(id);
-        tx.oncomplete = res; tx.onerror = res;
-      });
+      await new Promise((res) => { const r = indexedDB.deleteDatabase('mychat'); r.onsuccess = r.onerror = r.onblocked = () => res(); setTimeout(res, 1500); });
     } catch (e) { /* ignore */ }
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      (await reg.getNotifications()).forEach((n) => n.close());
+    } catch (e) { /* ignore */ }
+    try { if (navigator.clearAppBadge) navigator.clearAppBadge(); } catch (e) { /* ignore */ }
+  }
+  /** Purane version (v2.0) ne session token localStorage me aur key IndexedDB me bina password ke rakhi thi: hatao. */
+  function purgeLegacy() {
+    try { localStorage.removeItem('mychat.session'); localStorage.removeItem('mychat.remember'); localStorage.removeItem('mychat.flash'); } catch (e) { /* ignore */ }
+    try { indexedDB.deleteDatabase('mychat'); } catch (e) { /* ignore */ }
   }
 
-  MC.cr = { b64e, b64d, deriveKey, proof, pwHash, randSalt, encBytes, decBytes, encStr, decStr, makeKc, verifyKc, saveKey, loadKey, delKey };
+  MC.cr = { b64e, b64d, deriveKey, proof, pwHash, randSalt, encBytes, decBytes, encStr, decStr, makeKc, verifyKc, vaultSave, vaultOpen, vaultClear, hasVault, wipeLocal, purgeLegacy };
 })();

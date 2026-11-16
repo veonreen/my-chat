@@ -131,8 +131,21 @@ const waitEv = (s, ev, pred = () => true, ms = 3000) => new Promise((res) => {
   let limited = false;
   for (let i = 0; i < 70; i++) { const x = await http({ action: 'config' }); if (x.status === 429) { limited = true; break; } }
   t('IP rate-limit (429) on config flood', limited);
-  const lo = await rpc(sa, 'logout');
-  t('logout invalidates token', lo.ok && (await http({ action: 'sync', token: A.token })).j.error === 'auth');
+  console.log('\n[app lock: sessions + push]');
+  const DB = require('better-sqlite3');
+  const rd = (sql, ...a) => { const d = DB(path.join(data, 'mychat.db'), { readonly: true }); try { return d.prepare(sql).all(...a); } finally { d.close(); } };
+  const subsOf = () => rd('SELECT endpoint FROM push_subs WHERE uid=?', A.uid).length;
+  t('alice has a push subscription before lock', subsOf() === 1, subsOf());
+  const L2 = (await http({ action: 'login', username: 'alice', password: hex('a') })).j;
+  const lk = (await http({ action: 'logout', token: L2.token, keepPush: true })).j;
+  t('LOCK (logout keepPush): session invalid, push subscription KEPT', lk.ok && (await http({ action: 'sync', token: L2.token })).j.error === 'auth' && subsOf() === 1, subsOf());
+  for (let i = 0; i < 4; i++) await http({ action: 'login', username: 'alice', password: hex('a') });
+  const nSess = rd('SELECT COUNT(*) c FROM sessions WHERE uid=?', A.uid)[0].c;
+  t('orphan sessions capped at 5 per user (' + nSess + ')', nSess <= 5, nSess);
+  const L3 = (await http({ action: 'login', username: 'alice', password: hex('a') })).j;
+  const lo = (await http({ action: 'logout', token: L3.token })).j;
+  t('full LOGOUT removes push subscription too', lo.ok && subsOf() === 0, subsOf());
+  t('logout invalidates token', (await http({ action: 'sync', token: L3.token })).j.error === 'auth');
 
   console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
   [sa, sb2].forEach((s) => s.disconnect());

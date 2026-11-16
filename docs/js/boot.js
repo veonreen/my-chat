@@ -109,8 +109,10 @@
 
   async function boot(isRetry) {
     core.applyTheme();
-    const flash = LS.get('mychat.flash', null);
-    if (flash) { LS.del('mychat.flash'); setMode('login'); showErr('auth-err', flash); }
+    MC.cr.purgeLegacy();            // purane version ka bina-password wala token/key hatao
+    let flash = null;
+    try { flash = sessionStorage.getItem('mychat.flash'); sessionStorage.removeItem('mychat.flash'); } catch (e) { /* ignore */ }
+    if (flash) { setMode('login'); showErr('auth-err', flash); }
     const t0 = Date.now();
     let st = 'none';
     try { st = await core.restore(); } catch (e) { st = 'none'; }

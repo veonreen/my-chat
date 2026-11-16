@@ -98,6 +98,21 @@
       return dec.decode(await decBytes(await vaultKey(password, b64d(v.s), iter), b64d(v.d), vaultAad(username)));
     } catch (e) { return null; }
   }
+  /** Vault kis username ka hai ('' agar vault nahi). */
+  const vaultUser = () => { try { const v = JSON.parse(localStorage.getItem(VAULT) || 'null'); return v && v.v === 1 ? v.u : ''; } catch (e) { return ''; } };
+  /**
+   * Password badalte waqt: purane password se vault kholo, naye password se (naye salt ke saath) dobara encrypt karo.
+   * Naya vault STRING lautata hai (abhi store nahi karta: server ne password badal diya tab vaultStore karo).
+   * Vault nahi ho ya khul na sake to null.
+   */
+  async function vaultRewrap(username, oldPassword, newPassword) {
+    const secret = await vaultOpen(username, oldPassword);
+    if (secret == null) return null;
+    const salt = crypto.getRandomValues(new Uint8Array(16)), iter = 250000;
+    const ct = await encBytes(await vaultKey(newPassword, salt, iter), enc.encode(secret), vaultAad(username));
+    return JSON.stringify({ v: 1, u: String(username).toLowerCase(), s: b64e(salt), i: iter, d: b64e(ct) });
+  }
+  const vaultStore = (json) => { try { localStorage.setItem(VAULT, json); return true; } catch (e) { return false; } };
   const vaultClear = () => { try { localStorage.removeItem(VAULT); } catch (e) { /* ignore */ } };
   const hasVault = () => { try { return !!localStorage.getItem(VAULT); } catch (e) { return false; } };
 
@@ -121,5 +136,5 @@
     try { indexedDB.deleteDatabase('mychat'); } catch (e) { /* ignore */ }
   }
 
-  MC.cr = { b64e, b64d, deriveKey, proof, pwHash, randSalt, encBytes, decBytes, encStr, decStr, makeKc, verifyKc, vaultSave, vaultOpen, vaultClear, hasVault, wipeLocal, purgeLegacy };
+  MC.cr = { b64e, b64d, deriveKey, proof, pwHash, randSalt, encBytes, decBytes, encStr, decStr, makeKc, verifyKc, vaultSave, vaultOpen, vaultRewrap, vaultStore, vaultUser, vaultClear, hasVault, wipeLocal, purgeLegacy };
 })();

@@ -221,6 +221,23 @@
     await C.wipeLocal();
     location.reload();
   }
+  /**
+   * Password badlo. Order: (1) vault ko purane password se kholkar naye password se re-encrypt TAIYAR karo (abhi store nahi),
+   * (2) server par password badlo (purana verify hota hai), (3) tabhi naya vault store karo.
+   * Isse agar server mana kare (galat purana password) to vault jaisa tha waisa rehta hai.
+   */
+  async function changePassword(oldPw, newPw) {
+    const username = S.me.username;
+    if (newPw.length < 6) throw new api.ApiError('weak_password', 'Naya password kam se kam 6 characters ka rakho');
+    if (newPw === oldPw) throw new api.ApiError('same_password', 'Naya password purane jaisa nahi ho sakta');
+    const [oldH, newH] = [await C.pwHash(username, oldPw), await C.pwHash(username, newPw)];
+    const mine = C.vaultUser() === username;
+    const newVault = mine ? await C.vaultRewrap(username, oldPw, newPw) : null;
+    await api.call('chpw', { oldPassword: oldH, newPassword: newH }, { timeout: 30000 });
+    if (newVault) C.vaultStore(newVault);
+    else if (mine) C.vaultClear();            // vault khul hi nahi paya (kharab) => hata do, agle login par Secret Key poochega
+  }
+
   /** Settings: "Secret Key dobara daalo" => vault hatao aur lock karo (agle login par Secret Key poochega). */
   function forgetKey() { C.vaultClear(); lock('Secret Key hata di. Login karke dobara daalo.'); }
 
@@ -315,6 +332,7 @@
     api.on('state', (ok) => { if (MC.ui && MC.ui.setConn) MC.ui.setConn(ok); });
     api.on('reconnected', () => { catchUp(); });
     api.on('autherr', () => forceLogout('Session expire ho gaya. Dobara login karo.'));
+    api.on('revoked', () => forceLogout('Password badal diya gaya. Naye password se login karo.'));   // dusre device se password change hua
   }
   function pollNow() { autoSeen(); if (S.running && !api.connected && api.socket) api.socket.connect(); }
   async function refreshUsers() {
@@ -652,7 +670,7 @@
 
   MC.core = {
     applyTheme, setTheme, saveSettings, resolvedTheme,
-    login, signup, unlock, restore, logout, forceLogout, lockNow, forgetKey, startApp, afterAuth,
+    login, signup, unlock, restore, logout, forceLogout, lockNow, forgetKey, changePassword, startApp, afterAuth,
     sendText, sendFiles, recStart, recStop, retry, editMsg, deleteMsg, starMsg, loadOlder, saveProfile,
     getFileUrl, downloadFile, preview, unreadCount, totalUnread, lastMsg, canEdit, nameOf, peerOf,
     clearReply, clearEdit, markTyping, pollNow, askNotif, setupPush, dropPush, refreshUI, isActive, updateTitle, mergeMsgs,

@@ -47,7 +47,7 @@
           if (first) { first = false; s.close(); reject(new ApiError('network', 'Server se connect nahi ho pa raha')); }
           else api._emit('state', false);
         });
-        ['upd', 'peers', 'typing', 'pv'].forEach((ev) => s.on(ev, (d) => api._emit(ev, d)));
+        ['upd', 'peers', 'typing', 'pv', 'revoked'].forEach((ev) => s.on(ev, (d) => api._emit(ev, d)));
       });
     },
     disconnect() {

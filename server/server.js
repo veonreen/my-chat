@@ -95,6 +95,8 @@ const q = {
   subDel: db.prepare('DELETE FROM push_subs WHERE endpoint=?'),
   subDelUid: db.prepare('DELETE FROM push_subs WHERE uid=?'),
   purgeSessions: db.prepare('DELETE FROM sessions WHERE expires<?'),
+  setPw: db.prepare('UPDATE users SET salt=?, hash=? WHERE uid=?'),
+  delOtherSessions: db.prepare('DELETE FROM sessions WHERE uid=? AND tokenHash<>?'),
   trimSessions: db.prepare('DELETE FROM sessions WHERE uid=? AND tokenHash NOT IN (SELECT tokenHash FROM sessions WHERE uid=? ORDER BY created DESC LIMIT ?)'),
 };
 
@@ -411,6 +413,25 @@ const ACTIONS = {
     return { ok: true };
   },
   pushunsub(req) { if (req.endpoint) q.subDel.run(String(req.endpoint)); return { ok: true }; },
+  /** Password badlo: purana verify => naya salt+hash. Dusre devices ke sessions band (is device ka chalta rahe). */
+  async chpw(req, ctx) {
+    const u = q.userById.get(ctx.uid);
+    if (!u) throw new E('not_found');
+    const oldPw = String(req.oldPassword || ''), newPw = String(req.newPassword || '');
+    if (!/^[a-f0-9]{64}$/.test(oldPw) || !/^[a-f0-9]{64}$/.test(newPw)) throw new E('bad_password', 'Password format galat (app update karo)');
+    if (lockedOut(u.username)) throw new E('locked', 'Bahut galat attempts. 10 minute baad try karo');
+    if (!timingEq(await scrypt(oldPw, u.salt), u.hash)) { noteFail(u.username); throw new E('bad_password', 'Current password galat hai'); }
+    if (oldPw === newPw) throw new E('same_password', 'Naya password purane jaisa nahi ho sakta');
+    loginFails.delete(u.username);
+    const salt = rnd(24), hash = await scrypt(newPw, salt);
+    q.setPw.run(salt, hash, u.uid);
+    const keep = sha256(ctx.token);
+    q.delOtherSessions.run(u.uid, keep);
+    for (const s of io.sockets.sockets.values()) {        // dusre devices ke chalu sockets bhi kaat do
+      if (s.data.uid === u.uid && sha256(s.data.token) !== keep) { s.emit('revoked'); s.disconnect(true); }
+    }
+    return { ok: true };
+  },
 };
 
 async function dispatch(req, ctx) {
@@ -419,7 +440,7 @@ async function dispatch(req, ctx) {
   if (Object.prototype.hasOwnProperty.call(PUBLIC, action)) return PUBLIC[action](req);
   if (!Object.prototype.hasOwnProperty.call(ACTIONS, action)) throw new E('unknown_action');
   const token = ctx.token || req.token;
-  const uid = ctx.uid || authToken(token);
+  const uid = authToken(token);          // har request par session dobara check (socket par bhi): logout/password-change ke baad turant band
   const out = await ACTIONS[action](req, { uid, sid: ctx.sid || null, token });
   return out;
 }

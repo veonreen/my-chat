@@ -801,6 +801,43 @@
     mod = openModal({ title: 'Starred messages', cls: 'tall', body: [body] });
   }
 
+  function openChangePassword() {
+    const mk = (ac, ph) => h('input', { type: 'password', autocomplete: ac, placeholder: ph, maxlength: 200 });
+    const cur = mk('current-password', 'Current password'), nw = mk('new-password', 'Kam se kam 6 characters'), cf = mk('new-password', 'Naya password dobara');
+    const err = h('div', { class: 'err hidden' });
+    const show = h('input', { type: 'checkbox' });
+    show.addEventListener('change', () => [cur, nw, cf].forEach((i) => { i.type = show.checked ? 'text' : 'password'; }));
+    const save = h('button', { class: 'btn primary', type: 'submit' }, h('span', {}, 'Change password'), h('i', { class: 'spin' }));
+    const form = h('form', { class: 'pf-body', autocomplete: 'on' },
+      h('input', { type: 'text', autocomplete: 'username', value: S.me.username, hidden: true, readonly: true }),   // password manager ke liye
+      err,
+      h('label', { class: 'fld' }, h('span', {}, 'Current password'), cur),
+      h('label', { class: 'fld' }, h('span', {}, 'New password'), nw),
+      h('label', { class: 'fld' }, h('span', {}, 'Confirm new password'), cf),
+      h('label', { class: 'chk' }, show, h('span', {}, 'Passwords dikhao')),
+      h('div', { class: 'muted small' }, 'Is device par saved Secret Key naye password se dobara encrypt ho jayegi. Dusre devices par session band ho jayega: wahan naye password se login karna hoga (aur ek baar Secret Key daalni padegi).'),
+      save);
+    const mod = openModal({ title: 'Change password', cls: 'profile', body: [form] });
+    const fail = (m) => { err.textContent = m; err.classList.remove('hidden'); err.style.animation = 'none'; void err.offsetWidth; err.style.animation = ''; };
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      err.classList.add('hidden');
+      if (!cur.value) return fail('Current password daalo');
+      if (nw.value.length < 6) return fail('Naya password kam se kam 6 characters ka rakho');
+      if (nw.value === cur.value) return fail('Naya password purane jaisa nahi ho sakta');
+      if (nw.value !== cf.value) return fail('Dono naye password match nahi karte');
+      save.classList.add('loading'); save.disabled = true;
+      try {
+        await core.changePassword(cur.value, nw.value);
+        mod.close(); u.toast('Password badal gaya ✓');
+      } catch (e) {
+        fail(e.code === 'network' ? 'Server se connect nahi ho pa raha' : (e.message || 'Password nahi badla'));
+        save.classList.remove('loading'); save.disabled = false;
+      }
+    });
+    setTimeout(() => cur.focus(), 120);
+  }
+
   function openSettings() {
     const seg = h('div', { class: 'seg' });
     [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].forEach(([v, l]) => seg.append(h('button', { class: S.settings.theme === v ? 'on' : '', onclick: (e) => { core.setTheme(v); seg.querySelectorAll('button').forEach((b) => b.classList.remove('on')); e.currentTarget.classList.add('on'); } }, l)));
@@ -822,6 +859,8 @@
       h('div', { class: 'muted small pad' }, 'App band karke kholne par, ya 1 minute se zyada background me rehne par app lock ho jata hai. Unlock = username + password. Secret Key tumhare password se encrypt hokar is device par rakhi hai.'),
       h('button', { class: 'set-btn', onclick: () => core.lockNow() },
         h('span', { html: u.ic('lock') }), h('div', {}, h('div', {}, 'Lock app abhi'), h('div', { class: 'muted small' }, 'Notifications chalte rahenge'))),
+      h('button', { class: 'set-btn', onclick: () => openChangePassword() },
+        h('span', { html: u.ic('edit') }), h('div', {}, h('div', {}, 'Change password'), h('div', { class: 'muted small' }, 'Saved Secret Key naye password se re-encrypt hogi'))),
       h('button', { class: 'set-btn', onclick: () => confirmBox({ title: 'Secret Key badalni hai?', text: 'Is device se saved key hat jayegi. Login ke baad wahi Secret Key dobara daalni padegi.', ok: 'Continue' }).then((y) => { if (y) core.forgetKey(); }) },
         h('span', { html: u.ic('key') }), h('div', {}, h('div', {}, 'Secret Key dobara daalo'), h('div', { class: 'muted small' }, 'Is device se saved key hatao'))),
     ];

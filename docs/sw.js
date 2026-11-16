@@ -1,5 +1,5 @@
 /* MyChat service worker: app shell cache (offline open) + notification click */
-const CACHE = 'mychat-v3';   // version badlo => purana cache delete hota hai aur naya app sab devices par aata hai
+const CACHE = 'mychat-v4';   // version badlo => purana cache delete hota hai aur naya app sab devices par aata hai
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest',
   'js/config.js', 'js/util.js', 'js/crypto.js', 'js/vendor/socket.io.min.js', 'js/api.js', 'js/emoji.js', 'js/app.js', 'js/chat.js', 'js/boot.js',

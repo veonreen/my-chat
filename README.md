@@ -60,6 +60,7 @@ PC → internet → VPS (Traefik, HTTPS/WSS) → PC, 40 messages:
 | Voice messages | Mic button dabao, record karo, bhejo |
 | Emoji, links, search | Emoji panel, clickable links, sidebar + chat ke andar search |
 | **App Lock** | Tab/app band karke kholo, ya 1 minute se zyada background me raho => auto-lock, login screen. Menu → "Lock app" se manual lock. Unlock = username + password |
+| **Change password** | Settings → "Change password". Purana password server par verify hota hai, phir naya set. Is device ki vault naye password se re-encrypt hoti hai. Dusre devices ke session band ho jate hain |
 | Notifications | App khula ho to sound + notification. **App band ho to Web Push (VAPID)** |
 | Dark / Light | Upar 🌙 button, ya Settings me "System" |
 | PWA | Install kar sakte ho, shell offline khulta hai |
@@ -83,6 +84,8 @@ PC → internet → VPS (Traefik, HTTPS/WSS) → PC, 40 messages:
 - **Auto-lock:** app 1 minute se zyada background me raha, ya laptop sleep se jaga => memory saaf (page reload) aur login screen. Background me jaate hi chat blur ho jata hai (app-switcher me dikhe nahi).
 - **Lock != Logout.** Lock par vault bacha rehta hai (sirf password se khulta hai) aur **push subscription bachi rehti hai**, isliye notifications chalte rahte hain (unme message text hota hi nahi). **Logout** par vault, saved key, settings, notifications, push subscription sab is device se hat jata hai; dobara login par Secret Key daalni padegi.
 - **Dhyan:** vault ka password-strength tumhare password par tika hai. Device kisi ke haath lag jaye to kamzor password brute-force ho sakta hai, isliye lamba password rakho. Sirf tab band/reload karne par browser server ko bata nahi sakta, to server par wo session bacha reh jata hai (par token browser me hai hi nahi, aur server max 5 sessions rakhta hai, 30 din me expire).
+- **Change password (v2.2):** (1) vault purane password se khulta hai aur naye password se (naye salt ke saath) re-encrypt hone ke liye taiyar hota hai, (2) server purana password verify karke naya set karta hai (galat purana password dene par 8 koshish ke baad 10 min lockout), (3) tabhi naya vault store hota hai. Server mana kare to vault jaisa tha waisa rehta hai. **Dusre devices** ke session aur chalu sockets turant band ho jate hain (wahan naye password se login karna hoga, aur unki purani vault khulegi nahi, to ek baar Secret Key poochi jayegi). Is device ka session chalta rehta hai. Agar is device par vault nahi hai (remember off tha) to bas password badalta hai, vault nahi banti. Push subscription nahi hatti.
+- Server ab **har request par session dobara check** karta hai (socket par bhi), isliye logout / password change ke baad purana chalu socket bhi turant band ho jata hai.
 - Purane v2.0 ne token/key bina password ke rakhi thi: v2.1 pehle load par unhe hata deta hai. Update ke baad **ek baar Secret Key daalni padegi**, phir wo vault me yaad rahegi.
 
 **Server (VPS) hardening**
@@ -166,6 +169,7 @@ Restore ke liye: container band karo, `data/mychat.db` ko snap file se badlo, `d
 cd server && npm install --no-save socket.io-client@4
 node test/e2e.js     # 44 checks: signup/login, realtime, ticks, files, rate-limit ...
 node test/push.js    # 9 checks: Web Push (mock push service)
+node test/chpw.js    # 17 checks: change password, session revocation, brute-force lockout
 ```
 
 ---
@@ -180,8 +184,9 @@ node test/push.js    # 9 checks: Web Push (mock push service)
 | 🔒 "Message decrypt nahi ho paya" | Is device par galat Secret Key hai. Settings → "Secret Key dobara daalo" |
 | "Ye private chat hai, 2 users already hain" | Limit 2 users ki hai (`MAX_USERS` in `server/server.js`) |
 | Har baar login screen aati hai | Ye App Lock hai, jaan-boojh kar. Chahe to Settings me dekho: lock sirf band/1-min background par hota hai |
+| Password badalne ke baad dusre phone par login screen | Ye jaanbujh kar hai (security). Wahan naye password se login karo aur ek baar Secret Key daalo |
 | Login ke baad Secret Key poochta hai | Vault nahi mila (logout kiya tha, ya "Secret Key dobara daalo" dabaya). Daalo aur "yaad rakho" tick rakho |
-| Dono phones par purana version | Settings ke neeche "MyChat v..." dekho (abhi 2.1.0). Purana ho to app band karke kholo; service worker ka `mychat-v3` cache naya version le aata hai |
+| Dono phones par purana version | Settings ke neeche "MyChat v..." dekho (abhi 2.2.0). Purana ho to app band karke kholo; service worker ka `mychat-v4` cache naya version le aata hai |
 | App band hone par notification nahi | Settings → Notifications on? Browser permission allow? iPhone par pehle "Add to Home Screen" zaroori hai |
 | "Bahut zyada requests" | Rate limit laga hai, thodi der ruko |
 | Naya user chahiye / sab reset | Pehle backup lo, phir `data/mychat.db` ke `users, messages, sessions, files, push_subs` tables khali karo aur `meta` me `proofHash, ksalt, kc` hatao (VAPID keys mat hatao) |

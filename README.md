@@ -1,9 +1,12 @@
-# 💬 MyChat — Private End-to-End Encrypted Chat (2 users)
+# 💬 MyChat — Private End-to-End Encrypted Chat (2 users) — v2 (Realtime)
 
 WhatsApp-Web jaisa premium private chat app. Sirf **2 log** chat kar sakte hain. Messages, photos, files aur profile
-**aapke browser me hi encrypt** hote hain. Google Sheet / Drive me sirf encrypted data jaata hai.
+**aapke browser me hi encrypt** hote hain. Server ko sirf ciphertext milta hai.
+
+v2 me polling hata di gayi: ab **WebSocket (Socket.io)** hai, to message ~**0.07 sec** me pahunchta hai (pehle 3–8 sec).
 
 🌐 **Live app:** https://veonreen.github.io/my-chat/
+🖥️ **Backend (VPS):** https://chat.srv1898582.hstgr.cloud
 📦 **Code:** https://github.com/veonreen/my-chat
 
 ---
@@ -14,12 +17,29 @@ WhatsApp-Web jaisa premium private chat app. Sirf **2 log** chat kar sakte hain.
 2. **Pehla user:** "Sign up" → username, password, display name, aur ek **Secret Key** chuno
    (kam se kam 6 characters, jitni lambi utni achhi. Jaise ek chhota sa vaakya).
 3. **Dusra user:** "Sign up" → apna username/password, aur **WAHI SAME Secret Key** daalo.
-   Galat key daaloge to app signup hi nahi karne dega ✅
-4. Ho gaya! Ab chat shuru karo.
-5. Mobile par: Chrome me menu → **"Install app" / "Add to Home screen"** karo, to ye asli app jaisa chalega.
+   Galat key daaloge to server signup hi nahi karne dega ✅. Teesra insaan kabhi signup nahi kar sakta.
+4. Mobile par: Chrome me menu → **"Install app" / "Add to Home screen"**.
+5. Settings → **Notifications** on karo. Iske baad app band hone par bhi notification aayega (Web Push).
 
 > ⚠️ **Secret Key bhool gaye to purane messages wapas nahi aa sakte.** Isko kahin safe likh lo
-> (par chat me ya Sheet me mat daalo). Dono users ko ye key kisi aur raaste se (phone par, mil kar) batao.
+> (par chat me mat daalo). Dono users ko ye key kisi aur raaste se (phone par, mil kar) batao.
+
+---
+
+## ⚡ Speed (live VPS par naapa gaya)
+
+PC → internet → VPS (Traefik, HTTPS/WSS) → PC, 40 messages:
+
+| Kya | Median | p95 |
+|---|---|---|
+| **Message delay** (A bheje → B ko mile) | **66 ms** | 81 ms |
+| Server ack (delivered tick) | 66 ms | 81 ms |
+| Blue tick (B ne dekha → A ko dikha) | 62 ms | 144 ms |
+| Typing indicator | 63 ms | 72 ms |
+| Online/offline change | ~58 ms | |
+| Purana Apps Script (sirf **1 request**) | 2265 ms | 2630 ms |
+
+(Purane app me poll ~2.5 sec par hota tha, to asli delay 3–8 sec tha.)
 
 ---
 
@@ -27,61 +47,70 @@ WhatsApp-Web jaisa premium private chat app. Sirf **2 log** chat kar sakte hain.
 
 | Feature | Kaise kaam karta hai |
 |---|---|
-| Login / Signup | Username + password. Password browser me PBKDF2 se stretch hota hai, server par **salted SHA-256** hash me store hota hai. Login par session token milta hai (30 din). |
-| Real-time feel | Har 2-3 sec me polling (tab chhupa ho to 8 sec). |
-| Ticks | ✓ sent, ✓✓ delivered, ✓✓ (blue) seen |
+| Login / Signup | Username + password. Password browser me PBKDF2 se stretch hota hai, server par **scrypt** hash me store. Session token 30 din. Max **2 users**, uske baad signup band. |
+| Realtime | WebSocket (Socket.io). Server naya message / tick / typing / online turant push karta hai. Net toote to apne aap reconnect + miss hua message catch-up. |
+| Ticks | ✓ sent, ✓✓ delivered (receiver ka app connected), ✓✓ blue (chat khula hua dekha) |
 | Typing / Online / Last seen | Header me "typing...", "online", "last seen today at 5:42 pm" |
-| Reply | Message par swipe karo (mobile) ya ⌄ / right-click (desktop) |
+| Reply, Copy, Star | Swipe (mobile) ya ⌄ / right-click (desktop). Star sirf apne liye |
 | Edit | 15 minute tak (apne text messages) |
-| Delete for everyone | Dono taraf se hat jaata hai (file ho to Drive se bhi trash) |
-| Copy, Star | Star kiye messages: ⭐ icon se dekho |
+| Delete for everyone | Dono taraf se hat jaata hai, file bhi VPS se delete |
 | Photos | Auto compress (max 1280px JPEG), caption ke saath |
 | Documents | gzip compress + encrypt, max ~6 MB |
 | Voice messages | Mic button dabao, record karo, bhejo |
-| Emoji picker, links | Apna emoji panel; links clickable |
-| Search | Sidebar me (chats + messages) aur chat ke andar (🔍) |
-| Notifications + sound | Naye message par browser notification + tone |
-| Dark / Light mode | Upar 🌙 button, ya Settings me "System" |
-| Profile | Naam, photo, about (sab encrypted) |
+| Emoji, links, search | Emoji panel, clickable links, sidebar + chat ke andar search |
+| Notifications | App khula ho to sound + notification. **App band ho to Web Push (VAPID)** |
+| Dark / Light | Upar 🌙 button, ya Settings me "System" |
 | PWA | Install kar sakte ho, shell offline khulta hai |
 
 ---
 
 ## 🔐 Encryption aur Security (sach-sach)
 
+**App ke andar**
 - **E2EE:** AES-GCM-256 (Web Crypto). Key = **PBKDF2-SHA256 (250,000 rounds)** se "Secret Key" + random salt se banti hai.
 - **Secret Key server ko kabhi nahi jaati.** Is device par key **non-extractable** form me IndexedDB me rehti hai.
-- Message ka encryption **message-id ke saath bind** hai (AAD), to koi ciphertext idhar-udhar nahi badal sakta.
-- Jo **encrypted** hai: message text, reply preview, file naam/size/type, photos, documents, voice, profile naam/about/photo.
-- Jo **plain** dikhta hai (Sheet me): username, kisne kisko bheja (sender/receiver id), kab bheja, status (ticks), file ka size. Yaani "kya likha" nahi dikhta, "kab aur kitna" dikh sakta hai.
-- Signup ke waqt server ko Secret Key ka ek alag **derived proof (hash)** milta hai, taaki bahari insaan 2nd user na ban sake. Isse Secret Key nahi nikalti, par agar key **bahut kamzor** hai to koi guess kar sakta hai. **Isliye lambi key rakho.**
-- Notification (app band ho tab) ke liye "Web Push" server chahiye hota hai, jo is design me nahi hai. Notifications tab aate hain jab app/tab khula ho (background me bhi chalega).
+- Message ka encryption **message-id ke saath bind** (AAD), to koi ciphertext idhar-udhar nahi badal sakta.
+- **Encrypted:** message text, reply preview, file naam/size/type, photos, documents, voice, profile naam/about/photo.
+- **Server ko plain dikhta hai:** username, kisne kisko bheja, kab bheja, ticks status, file ka size. "Kya likha" nahi dikhta, "kab aur kitna" dikh sakta hai.
+- **Web Push me message ka text nahi hota** (server ko pata hi nahi). Sirf "🔒 Naya message" + sender ka username jaata hai.
+- Signup par server ko Secret Key ka alag **derived proof (hash)** milta hai taaki bahari insaan 2nd user na ban sake. **Isliye lambi key rakho.**
+
+**Server (VPS) hardening**
+- **UFW firewall:** sirf ports 22, 80, 443 khule (naye).
+- **SSH:** sirf key se login. Password login band, root login band. Naya user `mychat` (sudo).
+- **Fail2ban:** baar-baar galat SSH login karne wale IP 1 ghante ke liye block.
+- **Automatic security updates** (unattended-upgrades). Kernel update ke baad reboot khud karna padta hai.
+- **Node app non-root user** se, **Docker container** me: read-only filesystem, saari Linux capabilities band, memory limit 512 MB, koi port internet par expose nahi (sirf Traefik ke through HTTPS).
+- **Rate limit:** login (20 / 10 min / IP), signup (8 / ghanta / IP), + username lockout (8 galat attempts => 10 min). Socket par flood guard. CORS sirf `https://veonreen.github.io`.
+- **Daily encrypted backup:** roz 03:00 IST, `age` (public-key) se encrypt, 14 din rakhte hain. **Private key sirf owner ke PC par** (`C:\Users\<aap>\mychat-backup-private-key.txt`), server par sirf public key. Server hack ho jaye to bhi backup nahi khulte.
 
 ---
 
 ## 🧱 Kaise bana hai
 
 ```
- Browser (GitHub Pages, vanilla JS PWA)
-     │  encrypt/decrypt yahin hota hai
-     ▼  POST (JSON)
- Google Apps Script Web App  ──►  Google Sheet (Users, Messages, Sessions, Files, Meta)
-                              └─►  Google Drive folder "MyChat_Encrypted_Files" (sirf encrypted bytes)
+ Browser (GitHub Pages, vanilla JS PWA)           encrypt/decrypt yahin hota hai
+     │  WSS / HTTPS
+     ▼
+ Traefik (pehle se VPS par, auto Let's Encrypt SSL)   ← n8n jaisa hi, sirf Docker labels
+     ▼
+ mychat container (Node.js + Express + Socket.io + SQLite)
+     ├─ /data/mychat.db      (SQLite: users, ciphertext messages, sessions, push subs)
+     ├─ /data/files/         (encrypted attachments)
+     └─ Web Push (VAPID) ──► browser push service ──► phone/PC notification
 ```
 
 ```
 my-chat/
 ├─ docs/                  ← Frontend (GitHub Pages isi folder se chalta hai)
-│  ├─ index.html, css/style.css
-│  ├─ js/  config.js (backend URL) util.js crypto.js api.js emoji.js app.js chat.js boot.js
-│  ├─ sw.js, manifest.webmanifest, icons/
-├─ backend/               ← Google Apps Script (clasp se push hota hai)
-│  ├─ Code.gs, appsscript.json, .clasp.json
+│  ├─ index.html, css/style.css, sw.js, manifest.webmanifest, icons/
+│  └─ js/  config.js (backend URL) vendor/socket.io.min.js util.js crypto.js api.js emoji.js app.js chat.js boot.js
+├─ server/                ← NAYA backend (VPS par Docker me)
+│  ├─ server.js, backup.js, backup.sh, Dockerfile, docker-compose.yml
+│  ├─ test/ (e2e.js, push.js)   tools/decrypt-backup.mjs
+├─ backend/               ← PURANA Google Apps Script backend (ab use nahi hota, sirf reference)
 └─ README.md
 ```
-
-**Google Sheet** ke tabs (apne aap ban jaate hain): `Users`, `Messages`, `Sessions`, `Files`, `Meta`.
-Sheet me jo free-form strings hain unke aage `~` laga hota hai (taaki Google Sheets unhe formula na samjhe) — usko mat chhedna.
 
 ---
 
@@ -93,16 +122,40 @@ git add -A && git commit -m "change" && git push
 ```
 1-2 minute me GitHub Pages par live.
 
-**Backend badalna hai** (`backend/Code.gs`):
+**Backend badalna hai** (`server/`):
 ```bash
-cd backend
-clasp push --force
-clasp create-deployment -i AKfycbxFoTUW_bIo3a3qX-qS0zxZFtv4aoxg6M7HJRMuIjlm25JZLS5mW59d9zcwIBe9NmHD -d "naya version"
+# apne PC se (SSH key: ~/.ssh/mychat_vps, user: mychat)
+cd server
+tar czf /tmp/s.tgz --exclude=node_modules --exclude=data --exclude=test package.json package-lock.json server.js backup.js Dockerfile docker-compose.yml .dockerignore
+scp -i ~/.ssh/mychat_vps /tmp/s.tgz mychat@<VPS-IP>:/docker/mychat/src.tgz
+ssh -i ~/.ssh/mychat_vps mychat@<VPS-IP> 'cd /docker/mychat && tar xzf src.tgz && rm src.tgz && sudo docker compose build && sudo docker compose up -d'
 ```
-`-i` se **wahi URL** rehta hai, `docs/js/config.js` badalna nahi padta.
-Pehli baar naye permission lage to Apps Script editor me `setup` function ek baar Run karo.
+Sirf `mychat` container dobara banta hai. n8n / Evolution API / Traefik ko koi asar nahi.
 
-**Backend URL** `docs/js/config.js` me hai.
+**Useful commands (VPS par, `mychat` user se):**
+```bash
+sudo docker logs -f mychat                     # live logs
+sudo docker compose -f /docker/mychat/docker-compose.yml restart mychat
+sudo /docker/mychat/backup.sh                  # abhi backup lo
+sudo fail2ban-client status sshd               # kaun block hua
+sudo ufw status verbose
+```
+
+**Backup restore (apne PC par):**
+```bash
+scp mychat@<VPS-IP>:/docker/mychat/backups/mychat-<date>.tar.gz.age .
+cd server && npm install --no-save age-encryption
+node tools/decrypt-backup.mjs ../mychat-<date>.tar.gz.age out.tar.gz
+tar xzf out.tar.gz        # backups/snap-*.db (SQLite) + files/
+```
+Restore ke liye: container band karo, `data/mychat.db` ko snap file se badlo, `data/files/` wapas rakho, container chalao.
+
+**Tests (apne PC par, local):**
+```bash
+cd server && npm install --no-save socket.io-client@4
+node test/e2e.js     # 44 checks: signup/login, realtime, ticks, files, rate-limit ...
+node test/push.js    # 9 checks: Web Push (mock push service)
+```
 
 ---
 
@@ -110,20 +163,22 @@ Pehli baar naye permission lage to Apps Script editor me `setup` function ek baa
 
 | Problem | Solution |
 |---|---|
-| "Server ne galat jawab diya" / 403 | Apps Script → Deploy → Manage deployments → **Who has access = Anyone**, version = New version |
+| "Connecting…" banner | Net check karo. App khud reconnect karta hai aur miss hue messages laata hai |
+| "Server se connect nahi ho pa raha" | `sudo docker ps` me `mychat` healthy hai? `sudo docker logs mychat` dekho |
 | "Secret Key galat hai" | Dono users ki key bilkul same honi chahiye (capital/small letters bhi) |
 | 🔒 "Message decrypt nahi ho paya" | Is device par galat Secret Key hai. Settings → "Secret Key dobara daalo" |
-| "Ye private chat hai, 2 users already hain" | Limit 2 users ki hai (`MAX_USERS` in `Code.gs`) |
-| Message aane me 2-5 sec lagte hain | Google Apps Script ka apna latency hai. Normal hai |
-| Naya user chahiye / sab reset | Sheet ke `Users, Messages, Sessions, Files, Meta` tabs me header ko chhod kar rows delete karo |
+| "Ye private chat hai, 2 users already hain" | Limit 2 users ki hai (`MAX_USERS` in `server/server.js`) |
+| App band hone par notification nahi | Settings → Notifications on? Browser permission allow? iPhone par pehle "Add to Home Screen" zaroori hai |
+| "Bahut zyada requests" | Rate limit laga hai, thodi der ruko |
+| Naya user chahiye / sab reset | Pehle backup lo, phir `data/mychat.db` ke `users, messages, sessions, files, push_subs` tables khali karo aur `meta` me `proofHash, ksalt, kc` hatao (VAPID keys mat hatao) |
 
 ---
 
-## ⚙️ Limits (Google Apps Script ki wajah se)
+## ⚙️ Limits
 
 - Sirf 2 users, 1 chat.
 - Message 4000 characters tak; file ~6 MB tak.
-- Latency 2-5 sec (Apps Script ki base speed). Messages turant bubble me dikhte hain, ticks baad me aate hain.
-- Free Google account ki daily quota hai; normal 2-person use ke liye kaafi hai.
+- Notifications ke liye phone/browser ka push service (Google/Apple/Mozilla) chahiye, isliye net zaroori hai.
+- Is VPS par n8n aur client ki Evolution API bhi chal rahi hain. Chat app unse alag container me hai, par CPU/RAM share hota hai.
 
 Made with ❤️ — MyChat ka apna logo aur naam hai.

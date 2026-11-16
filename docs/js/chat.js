@@ -812,9 +812,9 @@
     const rows = [
       h('div', { class: 'set-sec' }, 'Appearance'), h('div', { class: 'set-row col' }, seg),
       h('div', { class: 'set-sec' }, 'Notifications'),
-      sw('Desktop notifications', 'Naye message par alert (app khula hona chahiye)', () => S.settings.notif && 'Notification' in window && Notification.permission === 'granted', async (on) => {
-        if (on) { const r = await core.askNotif(); S.settings.notif = r === 'granted'; if (r !== 'granted') u.toast('Browser settings me notifications allow karo'); }
-        else S.settings.notif = false;
+      sw('Notifications', 'Naye message par alert (app band ho tab bhi, Web Push)', () => S.settings.notif && 'Notification' in window && Notification.permission === 'granted', async (on) => {
+        if (on) { S.settings.notif = true; const r = await core.askNotif(); S.settings.notif = r === 'granted'; if (r !== 'granted') u.toast('Browser settings me notifications allow karo'); }
+        else { S.settings.notif = false; core.dropPush(); }
         core.saveSettings(); maybeNotifBanner();
       }),
       sw('Message sounds', 'Send / receive tone', () => S.settings.sound, async (on) => { S.settings.sound = on; core.saveSettings(); if (on) { u.unlockAudio(); u.beep('in'); } }),

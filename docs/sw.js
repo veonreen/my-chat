@@ -1,8 +1,8 @@
 /* MyChat service worker: app shell cache (offline open) + notification click */
-const CACHE = 'mychat-v1';
+const CACHE = 'mychat-v2';
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest',
-  'js/config.js', 'js/util.js', 'js/crypto.js', 'js/api.js', 'js/emoji.js', 'js/app.js', 'js/chat.js', 'js/boot.js',
+  'js/config.js', 'js/util.js', 'js/crypto.js', 'js/vendor/socket.io.min.js', 'js/api.js', 'js/emoji.js', 'js/app.js', 'js/chat.js', 'js/boot.js',
   'icons/logo.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 
@@ -23,6 +23,20 @@ self.addEventListener('fetch', (e) => {
       return res;
     }).catch(() => caches.match(req).then((r) => r || caches.match('index.html')))
   );
+});
+// Web Push: server sirf "naya message" bhejta hai (E2EE: text server ko pata hi nahi).
+// App screen par dikh raha ho to notification nahi dikhate.
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (err) { d = {}; }
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    if (list.some((c) => c.visibilityState === 'visible')) return;
+    return self.registration.showNotification(d.title || 'MyChat', {
+      body: d.body || 'Naya message',
+      icon: 'icons/icon-192.png', badge: 'icons/icon-192.png',
+      tag: 'chat-' + (d.from || 'x'), renotify: true, data: { peer: d.from },
+    });
+  }));
 });
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();

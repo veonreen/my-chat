@@ -4,3 +4,10 @@
 .DS_Store
 Thumbs.db
 .claude/
+
+server/data/
+server/node_modules/
+*.agekey
+*private-key*
+*.pem
+.env

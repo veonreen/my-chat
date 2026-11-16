@@ -11,7 +11,8 @@
     if (!e) return 'Kuch gadbad ho gayi';
     if (e.code === 'network') return 'Server se connect nahi ho pa raha. Internet check karo.';
     if (e.code === 'no_api') return e.message;
-    if (e.code === 'bad_response') return 'Server ne galat jawab diya. Backend deploy (Anyone access) check karo.';
+    if (e.code === 'bad_response') return 'Server ne galat jawab diya. Thodi der baad dobara try karo.';
+    if (e.code === 'rate_limited') return 'Bahut zyada koshish. Thodi der baad try karo.';
     return e.message || 'Kuch gadbad ho gayi';
   }
   function showErr(id, msg) { const n = $(id); n.textContent = msg; n.classList.remove('hidden'); }

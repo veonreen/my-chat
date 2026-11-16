@@ -1,4 +1,4 @@
-/* MyChat — core logic: state, auth, E2EE data flow, polling, sending */
+/* MyChat — core logic: state, auth, E2EE data flow, realtime (Socket.io), sending */
 (function () {
   const MC = window.MC;
   const { u, api } = MC;
@@ -15,7 +15,7 @@
     msgs: new Map(),          // peerUid -> [message] (sorted by ts)
     byId: new Map(),          // msgId -> message
     current: null,            // open chat peer uid
-    ver: '', since: 0, pv: '', peers: {}, more: {}, running: false,
+    since: 0, pv: '', peers: {}, more: {}, running: false, vapid: '', pushOn: false,
     settings: Object.assign({ theme: 'system', sound: true, notif: true }, LS.get('mychat.settings', {})),
     replyTo: null, editing: null, drafts: {}, searchQ: '', typingAt: 0,
   });
@@ -189,12 +189,13 @@
   }
 
   function cleanupAndReload() {
-    S.running = false; clearTimeout(pollTimer);
+    S.running = false; api.disconnect();
     if (LS.get('mychat.remember', true) === false && S.uid) C.delKey(S.uid);
     LS.del('mychat.session');
     location.reload();
   }
   async function logout() {
+    try { await dropPush(); } catch (e) { /* ignore */ }
     try { await api.call('logout', {}, { timeout: 6000 }); } catch (e) { /* ignore */ }
     cleanupAndReload();
   }
@@ -203,10 +204,11 @@
     cleanupAndReload();
   }
 
-  // ================= Sync & polling =================
+  // ================= Sync & realtime (Socket.io) =================
+  // Ab polling nahi: server naya message / tick / typing / online turant PUSH karta hai.
   async function fullSync() {
-    const r = await api.call('sync', { vis: !document.hidden }, { timeout: 40000 });
-    S.ver = r.ver; S.pv = r.pv; S.peers = r.peers || {};
+    const r = await api.call('sync', {}, { timeout: 40000 });
+    S.pv = r.pv; S.peers = r.peers || {}; S.vapid = r.vapid || S.vapid;
     await setUsers(r.users);
     S.msgs.clear(); S.byId.clear();
     await mergeMsgs(r.msgs);
@@ -214,53 +216,70 @@
     for (const p of S.users.keys()) if (p !== S.uid) S.more[p] = (S.msgs.get(p) || []).length >= 1;
   }
 
-  let pollTimer = null, polling = false, again = false, failCount = 0;
-  function schedulePoll(ms) {
-    clearTimeout(pollTimer);
-    if (S.running) pollTimer = setTimeout(pollTick, ms);
+  const bumpSince = (msgs) => { for (const m of msgs) if (m.upd > S.since) S.since = m.upd; };
+  const typingTimers = {};
+  let seenBusy = false;
+
+  /** Is chat me jo messages mere liye aaye hain aur "seen" nahi => server ko batao (blue ticks). */
+  function autoSeen() {
+    if (!S.running || !S.current || !isActive() || seenBusy) return;
+    const peer = S.current;
+    if (!(S.msgs.get(peer) || []).some((m) => m.to === S.uid && m.status < 2 && !m.deleted)) return;
+    seenBusy = true;
+    api.call('seen', { peer }, { timeout: 15000 })
+      .then((r) => mergeMsgs(r.msgs || []).then(() => { bumpSince(r.msgs || []); refreshUI(); }))
+      .catch(() => {})
+      .finally(() => { seenBusy = false; });
   }
-  function pollNow() {
+
+  /** Reconnect ke baad: jo miss hua wo lao. */
+  async function catchUp() {
     if (!S.running) return;
-    if (polling) { again = true; return; }
-    clearTimeout(pollTimer); pollTick();
-  }
-  async function pollTick() {
-    if (polling) return;
-    polling = true;
-    const t0 = Date.now();
     try {
-      await pollOnce();
-      failCount = 0;
-      if (MC.ui) MC.ui.setConn(true);
-    } catch (e) {
-      if (e.code === 'auth') { polling = false; return forceLogout('Session expire ho gaya. Dobara login karo.'); }
-      failCount++;
-      if (failCount >= 2 && MC.ui) MC.ui.setConn(false);
-    } finally {
-      polling = false;
-      const rtt = Date.now() - t0;
-      const wait = again ? 100 : document.hidden ? 8000 : failCount ? Math.min(12000, 2500 * (failCount + 1)) : Math.max(400, 2500 - rtt);
-      again = false;
-      schedulePoll(wait);
-    }
+      const r = await api.call('poll', { since: S.since }, { timeout: 25000 });
+      if (r.peers) S.peers = mergePeers(r.peers);
+      if (r.pv && r.pv !== S.pv) { S.pv = r.pv; refreshUsers(); }
+      if (r.msgs && r.msgs.length) {
+        const added = await mergeMsgs(r.msgs);
+        bumpSince(r.msgs);
+        notifyIncoming(added);
+      }
+      refreshUI(); autoSeen();
+    } catch (e) { if (e.code === 'auth') forceLogout('Session expire ho gaya. Dobara login karo.'); }
   }
-  async function pollOnce() {
-    const viewing = S.current && isActive() ? S.current : '';
-    const unseen = viewing && (S.msgs.get(viewing) || []).some((m) => m.to === S.uid && m.status < 2 && !m.deleted);
-    const typingTo = S.current && Date.now() - S.typingAt < 3000 ? S.current : '';
-    const r = await api.call('poll', { ver: S.ver, since: S.since, vis: !document.hidden, viewing, force: !!unseen, typingTo }, { timeout: 25000 });
-    S.ver = r.ver;
-    S.peers = r.peers || {};
-    if (r.pv && r.pv !== S.pv) { S.pv = r.pv; refreshUsers(); }
-    if (r.msgs && r.msgs.length) {
-      const added = await mergeMsgs(r.msgs);
-      S.since = Math.max(S.since, r.maxUpd || 0);
+
+  function mergePeers(inc) {
+    const out = Object.assign({}, S.peers);
+    for (const k of Object.keys(inc)) out[k] = Object.assign({}, out[k], inc[k], { typingTo: out[k] && out[k].typingTo });
+    return out;
+  }
+  function sendVis() { if (S.running) api.call('vis', { vis: !document.hidden }, { timeout: 8000 }).catch(() => {}); }
+
+  let bound = false;
+  function bindRealtime() {
+    if (bound) return; bound = true;
+    api.on('upd', async (d) => {
+      if (!S.running || !d || !d.msgs) return;
+      const added = await mergeMsgs(d.msgs);
+      bumpSince(d.msgs);
+      for (const m of added) if (m.from !== S.uid && S.peers[m.from]) { S.peers[m.from].typingTo = ''; clearTimeout(typingTimers[m.from]); }
       notifyIncoming(added);
-      refreshUI();
-    } else {
+      refreshUI(); autoSeen();
+    });
+    api.on('peers', (d) => { if (!S.running) return; S.peers = mergePeers(d); if (MC.ui) { MC.ui.updateStatus(); MC.ui.presenceChanged(); } });
+    api.on('typing', (d) => {
+      if (!S.running || !d || !d.from) return;
+      S.peers[d.from] = Object.assign({}, S.peers[d.from], { typingTo: S.uid });
+      clearTimeout(typingTimers[d.from]);
+      typingTimers[d.from] = setTimeout(() => { if (S.peers[d.from]) S.peers[d.from].typingTo = ''; if (MC.ui) { MC.ui.updateStatus(); MC.ui.presenceChanged(); } }, 4500);
       if (MC.ui) { MC.ui.updateStatus(); MC.ui.presenceChanged(); }
-    }
+    });
+    api.on('pv', (d) => { if (S.running && d && d.pv !== S.pv) { S.pv = d.pv; refreshUsers(); } });
+    api.on('state', (ok) => { if (MC.ui && MC.ui.setConn) MC.ui.setConn(ok); });
+    api.on('reconnected', () => { catchUp(); });
+    api.on('autherr', () => forceLogout('Session expire ho gaya. Dobara login karo.'));
   }
+  function pollNow() { autoSeen(); if (S.running && !api.connected && api.socket) api.socket.connect(); }
   async function refreshUsers() {
     try {
       const r = await api.call('users');
@@ -272,8 +291,35 @@
   // ================= Notifications =================
   async function askNotif() {
     if (!('Notification' in window)) return 'unsupported';
-    if (Notification.permission === 'granted') return 'granted';
-    try { return await Notification.requestPermission(); } catch (e) { return 'denied'; }
+    let r = Notification.permission;
+    if (r !== 'granted') { try { r = await Notification.requestPermission(); } catch (e) { r = 'denied'; } }
+    if (r === 'granted') setupPush();
+    return r;
+  }
+
+  // ---- Web Push (VAPID): app band ho tab bhi notification ----
+  const b64u8 = (s) => { const p = '='.repeat((4 - (s.length % 4)) % 4); const b = atob((s + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
+  async function setupPush() {
+    try {
+      if (!S.vapid || !S.settings.notif || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+      if (!('Notification' in window) || Notification.permission !== 'granted') return;
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      const want = b64u8(S.vapid);
+      const have = sub && sub.options && sub.options.applicationServerKey ? new Uint8Array(sub.options.applicationServerKey) : null;
+      if (sub && have && (have.length !== want.length || have.some((v, i) => v !== want[i]))) { await sub.unsubscribe(); sub = null; }  // server key badli
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: want });
+      await api.call('pushsub', { sub: sub.toJSON() });
+      S.pushOn = true;
+    } catch (e) { S.pushOn = false; }
+  }
+  async function dropPush() {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) { await api.call('pushunsub', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); }
+      S.pushOn = false;
+    } catch (e) { /* ignore */ }
   }
   function notifyIncoming(added) {
     const inc = added.filter((m) => m.to === S.uid && !m.deleted);
@@ -281,7 +327,7 @@
     const last = inc[inc.length - 1];
     const active = isActive() && S.current === last.from;
     if (S.settings.sound) u.beep('in');
-    if (!active && S.settings.notif && 'Notification' in window && Notification.permission === 'granted') {
+    if (!active && S.settings.notif && !(S.pushOn && document.hidden) && 'Notification' in window && Notification.permission === 'granted') {
       const title = nameOf(last.from);
       const body = (inc.length > 1 ? `${inc.length} new messages · ` : '') + preview(last);
       const opts = { body, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: 'chat-' + last.from, renotify: true, data: { peer: last.from } };
@@ -331,7 +377,7 @@
     const r = await api.call('send', { id: m.id, to: m.to, type: m.type, payload, replyId: m.reply || '', fileId: m.fileId || '' }, { timeout: 40000 });
     Object.assign(m, r.msg, { pending: false, failed: false, uploading: false });
     m._pl = r.msg.payload; m.dec = true;
-    S.since = Math.max(0, S.since); // poll will pick up status changes
+    S.since = Math.max(S.since, r.msg.upd || 0);
     sortAll();
     MC.ui.msgChanged(m);
     refreshUI();
@@ -540,17 +586,21 @@
     api.call('typing', { to: S.current }, { timeout: 8000 }).catch(() => {});
   }
   async function startApp() {
+    bindRealtime();
+    await api.connect();            // WebSocket (token galat ho to ApiError 'auth')
     await fullSync();
     S.running = true;
     MC.ui.start();
+    MC.ui.setConn(true);
     updateTitle();
-    schedulePoll(2500);
+    catchUp();                      // sync ke dauran aaye events na chhute
+    setupPush();
   }
   function retry(m) { if (m.failed && m._send) { enqueue(m); MC.ui.msgChanged(m); } }
 
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) pollNow(); });
-  window.addEventListener('focus', pollNow);
-  window.addEventListener('online', pollNow);
+  document.addEventListener('visibilitychange', () => { sendVis(); if (!document.hidden) pollNow(); });
+  window.addEventListener('focus', () => { sendVis(); pollNow(); });
+  window.addEventListener('online', () => { if (S.running && api.socket && !api.connected) api.socket.connect(); });
   window.addEventListener('pointerdown', u.unlockAudio, { once: true });
   window.addEventListener('keydown', u.unlockAudio, { once: true });
 
@@ -559,6 +609,6 @@
     login, signup, unlock, restore, logout, forceLogout, startApp, afterAuth,
     sendText, sendFiles, recStart, recStop, retry, editMsg, deleteMsg, starMsg, loadOlder, saveProfile,
     getFileUrl, downloadFile, preview, unreadCount, totalUnread, lastMsg, canEdit, nameOf, peerOf,
-    clearReply, clearEdit, markTyping, pollNow, askNotif, refreshUI, isActive, updateTitle, mergeMsgs,
+    clearReply, clearEdit, markTyping, pollNow, askNotif, setupPush, dropPush, refreshUI, isActive, updateTitle, mergeMsgs,
   };
 })();

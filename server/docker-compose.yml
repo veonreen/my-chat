@@ -1,0 +1,28 @@
+# MyChat v2 — Traefik ke peeche chalta hai (n8n jaisa hi: sirf labels, koi published port nahi)
+services:
+  mychat:
+    build: .
+    image: mychat:latest
+    container_name: mychat
+    restart: unless-stopped
+    user: "1000:1000"            # host ke `mychat` user se match (data folder permission)
+    read_only: true              # container ka filesystem read-only
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 200
+    environment:
+      - ALLOWED_ORIGINS=https://veonreen.github.io
+      - VAPID_SUBJECT=mailto:veonreen@gmail.com
+    volumes:
+      - ./data:/data             # SQLite + encrypted files + backups
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.mychat.rule=Host(`chat.srv1898582.hstgr.cloud`)
+      - traefik.http.routers.mychat.entrypoints=websecure
+      - traefik.http.routers.mychat.tls.certresolver=letsencrypt
+      - traefik.http.services.mychat.loadbalancer.server.port=3000

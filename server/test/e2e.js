@@ -30,12 +30,11 @@ const waitEv = (s, ev, pred = () => true, ms = 3000) => new Promise((res) => {
 
   console.log('\n[auth]');
   let r = (await http({ action: 'config' })).j;
-  t('config: no workspace, vapid key present', r.ok && !r.hasWorkspace && r.vapid && r.vapid.length > 60, r);
+  t('config: no key yet, vapid key present', r.ok && r.hasKey === false && r.vapid && r.vapid.length > 60, r);
   const A = (await http({ action: 'signup', username: 'Alice', password: hex('a'), proof: hex('1'), ksalt: 'salt1', kc: 'kc1' })).j;
   t('alice signup', A.ok && A.token && A.uid, A);
-  t('wrong proof rejected for 2nd user', (await http({ action: 'signup', username: 'bob', password: hex('b'), proof: hex('9') })).j.error === 'wrong_key');
   const B = (await http({ action: 'signup', username: 'bob', password: hex('b'), proof: hex('1') })).j;
-  t('bob signup (same proof) gets ksalt+kc', B.ok && B.ksalt === 'salt1' && B.kc === 'kc1', B);
+  t('signup needs no secret key; key info is empty until the first unlock', B.ok && B.kver === 0 && !B.kc && !B.ksalt, B);
   t('3rd user blocked (full)', (await http({ action: 'signup', username: 'carol', password: hex('c'), proof: hex('1') })).j.error === 'full');
   t('bad login rejected', (await http({ action: 'login', username: 'alice', password: hex('z') })).j.error === 'bad_login');
   const L = (await http({ action: 'login', username: 'alice', password: hex('a') })).j;

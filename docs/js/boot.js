@@ -1,4 +1,4 @@
-/* Galaxy Relax: boot. Login / join / Galaxy Key screens, then the decoy sky (see stealth.js). */
+/* Galaxy Relax: boot. Login / join screens, then the sky (see stealth.js). The unlock code is typed in the sky, never on a form. */
 (function () {
   const MC = window.MC;
   const { u } = MC;
@@ -26,7 +26,7 @@
     $('tab-ink').style.transform = m === 'login' ? 'translateX(0)' : 'translateX(100%)';
     document.querySelectorAll('#auth .su').forEach((n) => n.classList.toggle('hidden', m !== 'signup'));
     $('auth-title').textContent = m === 'login' ? 'Welcome back, explorer' : 'Join the galaxy';
-    $('auth-sub').textContent = m === 'login' ? 'Log in with your username and password.' : 'Create your explorer. You both use the same Galaxy Key.';
+    $('auth-sub').textContent = m === 'login' ? 'Log in with your username and password.' : 'Create your explorer. Your unlock code is typed later, in the sky.';
     $('auth-submit').firstChild.textContent = m === 'login' ? 'Log in' : 'Join';
     $('f-pass').autocomplete = m === 'login' ? 'current-password' : 'new-password';
     hideErr('auth-err');
@@ -42,17 +42,9 @@
       MC.showScreen('neterr');
     }
   }
-  function showKey() {
-    MC.showScreen('keyscreen');
-    hideErr('key-err'); $('k-secret').value = '';
-    setTimeout(() => $('k-secret').focus(), 100);
-  }
-
   function bindAuth() {
     $('pw-eye').innerHTML = u.ic('eye');
-    $('key-ic').innerHTML = u.ic('key');
     $('neterr-ic').innerHTML = u.ic('wifiOff');
-    $('hint-ic').innerHTML = u.ic('lock');
     $('foot-ic').innerHTML = u.ic('sparkles');
     $('tab-login').addEventListener('click', () => setMode('login'));
     $('tab-signup').addEventListener('click', () => setMode('signup'));
@@ -68,40 +60,23 @@
       const username = $('f-user').value.trim().toLowerCase();
       const password = $('f-pass').value;
       const name = $('f-name').value.trim();
-      const secret = $('f-secret').value;
       if (!username || !password) return showErr('auth-err', 'Enter your username and password');
       if (mode === 'signup') {
         if (!/^[a-z0-9_.]{3,20}$/.test(username)) return showErr('auth-err', 'Username: 3 to 20 characters, a-z, 0-9, _ or .');
         if (password.length < 6) return showErr('auth-err', 'The password needs at least 6 characters');
         if (!name) return showErr('auth-err', 'Enter your explorer name');
-        if (secret.length < 6) return showErr('auth-err', 'The Galaxy Key needs at least 6 characters');
       }
       const btn = $('auth-submit');
       busy(btn, true);
       try {
         MC.u.unlockAudio();
         MC.stealth.askMotion();                   // iPhone asks once for motion access (used for shake to hide)
-        const st = mode === 'login' ? await core.login(username, password) : await core.signup({ username, password, name, secret });
-        if (st === 'need_key') showKey(); else await enter();
+        if (mode === 'login') await core.login(username, password); else await core.signup({ username, password, name });
+        await enter();
       } catch (e) {
         showErr('auth-err', friendly(e));
       } finally { busy(btn, false); }
     });
-
-    $('key-form').addEventListener('submit', async (ev) => {
-      ev.preventDefault();
-      hideErr('key-err');
-      const secret = $('k-secret').value;
-      if (!secret) return showErr('key-err', 'Enter the Galaxy Key');
-      const btn = $('key-submit');
-      busy(btn, true);
-      try {
-        await core.unlock(secret, $('k-remember').checked);
-        await enter();
-      } catch (e) { showErr('key-err', friendly(e)); }
-      finally { busy(btn, false); }
-    });
-    $('key-logout').addEventListener('click', () => core.logout());
 
     $('neterr-retry').addEventListener('click', async () => {
       const b = $('neterr-retry'); busy(b, true);
@@ -121,7 +96,6 @@
     const wait = Math.max(0, 450 - (Date.now() - t0));
     if (!isRetry) await u.sleep(wait);
     if (st === 'none') { if (!flash) setMode('login'); MC.showScreen('auth'); }
-    else if (st === 'need_key') showKey();
     else await enter();
   }
 

@@ -1,6 +1,6 @@
 'use strict';
 /**
- * Galaxy Relax (MyChat) v3 — realtime backend (Express + Socket.io + SQLite)
+ * Galaxy Relax (MyChat) v4 — realtime backend (Express + Socket.io + SQLite)
  * ------------------------------------------------------------
  * - Server SIRF ciphertext dekhta hai. Secret Key / AES key kabhi yahan nahi aati.
  * - Actions purane Apps Script backend jaise hi hain (send, edit, del, history ...),
@@ -88,6 +88,10 @@ const q = {
   delMsg: db.prepare("UPDATE messages SET payload='', deleted=1, upd=? WHERE id=?"),
   starMsg: db.prepare('UPDATE messages SET starredBy=?, upd=? WHERE id=?'),
   reactMsg: db.prepare('UPDATE messages SET reacts=?, upd=? WHERE id=?'),
+  allMsgs: db.prepare('SELECT id, payload, reacts, deleted FROM messages'),
+  rekeyMsg: db.prepare('UPDATE messages SET payload=?, reacts=?, upd=? WHERE id=?'),
+  setEnc: db.prepare('UPDATE users SET nameEnc=?, aboutEnc=?, photoEnc=?, profUpd=? WHERE uid=?'),
+  allFiles: db.prepare('SELECT fileId FROM files'),
   fileById: db.prepare('SELECT * FROM files WHERE fileId=?'),
   insFile: db.prepare('INSERT INTO files(fileId,msgId,frm,rcv,size,ts) VALUES(?,?,?,?,?,?)'),
   linkFile: db.prepare('UPDATE files SET msgId=?, rcv=? WHERE fileId=?'),
@@ -135,9 +139,10 @@ function msgOut(r, uid) {
 function userOut(r) {
   return { uid: r.uid, username: r.username, nameEnc: r.nameEnc, aboutEnc: r.aboutEnc, photoEnc: r.photoEnc, created: r.created, lastSeen: r.lastSeen, profUpd: r.profUpd };
 }
-// Secret-code record for the decoy screen: {s: salt hex, h: PBKDF2 hash hex, i: iterations, n: length, ts}.
-// Only a salted slow hash is stored (never the code), so both phones can share one code and change it together.
-const getSc = () => { const m = q.getMeta.get('sc'); try { return m ? JSON.parse(m.value) : null; } catch (e) { return null; } };
+// Key material kept by the server (all of it is public-safe): per-install random salt, a small encrypted "check" value
+// that lets a device verify the unlock code locally, and a version counter that changes when the code is changed.
+// The unlock code itself, and any hash of it, never reaches the server.
+const keyInfo = () => { const k = q.getMeta.get('kc'), v = q.getMeta.get('kver'); return { ksalt: (q.getMeta.get('ksalt') || {}).value || '', kc: k ? k.value : '', kver: v ? Number(v.value) : 0 }; };
 const uidList = () => q.allUsers.all().map((u) => u.uid);
 const getPv = () => { const m = q.getMeta.get('pv'); return m ? m.value : '0'; };
 const bumpPv = () => { const v = String(Date.now()); q.setMeta.run('pv', v); return v; };
@@ -164,7 +169,7 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-app.get('/', (req, res) => res.json({ ok: true, app: 'GalaxyRelax', v: 3, time: Date.now() }));
+app.get('/', (req, res) => res.json({ ok: true, app: 'GalaxyRelax', v: 4, time: Date.now() }));
 app.get('/health', (req, res) => res.json({ ok: true, time: Date.now() }));
 
 // ---- rate limits (login/signup/config par sakht, baaki par dheela) ----
@@ -252,24 +257,16 @@ function createSession(uid, ua) {
 const PUBLIC = {
   config() {
     const n = q.countUsers.get().c;
-    return { ok: true, hasWorkspace: !!q.getMeta.get('proofHash'), full: n >= MAX_USERS, users: n, vapid: VAPID.publicKey };
+    return { ok: true, hasKey: !!q.getMeta.get('kc'), full: n >= MAX_USERS, users: n, vapid: VAPID.publicKey };
   },
   async signup(req) {
-    const username = normUser(req.username), pw = String(req.password || ''), proof = String(req.proof || '');
+    const username = normUser(req.username), pw = String(req.password || '');
     if (!/^[a-z0-9_.]{3,20}$/.test(username)) throw new E('bad_username', 'Username 3-20 chars: a-z 0-9 _ .');
     if (!/^[a-f0-9]{64}$/.test(pw)) throw new E('bad_password', 'Invalid password format (please update the app)');
-    if (!/^[a-f0-9]{64}$/.test(proof)) throw new E('bad_proof');
-    const salt = rnd(24), hash = await scrypt(pw, salt);          // async hash pehle, phir atomic check
-    const ph = sha256(proof);
+    const salt = rnd(24), hash = await scrypt(pw, salt);          // slow hash first, then the atomic check
     const tx = db.transaction(() => {
       if (q.countUsers.get().c >= MAX_USERS) throw new E('full', 'This galaxy already has two explorers');
       if (q.userByName.get(username)) throw new E('exists', 'That username is already taken');
-      const existing = q.getMeta.get('proofHash');
-      if (!existing) {
-        const ksalt = String(req.ksalt || ''), kc = String(req.kc || '');
-        if (!ksalt || !kc || ksalt.length > 100 || kc.length > 500) throw new E('bad_key');
-        q.setMeta.run('proofHash', ph); q.setMeta.run('ksalt', ksalt); q.setMeta.run('kc', kc);
-      } else if (!timingEq(existing.value, ph)) throw new E('wrong_key', 'The Secret Key is wrong');
       const uid = 'u' + rnd(10), now = Date.now();
       q.insUser.run(uid, username, salt, hash, now, now, now);
       bumpPv();
@@ -277,8 +274,8 @@ const PUBLIC = {
     });
     const uid = tx();
     const pv = getPv();
-    for (const p of uidList()) if (p !== uid) emitTo(p, 'pv', { pv });      // pehle wale user ko naya user dikhe
-    return { ok: true, token: createSession(uid, req.ua), uid, me: userOut(q.userById.get(uid)), ksalt: q.getMeta.get('ksalt').value, kc: q.getMeta.get('kc').value };
+    for (const p of uidList()) if (p !== uid) emitTo(p, 'pv', { pv });      // the first user sees the new user
+    return { ok: true, token: createSession(uid, req.ua), uid, me: userOut(q.userById.get(uid)), ...keyInfo() };
   },
   async login(req) {
     const username = normUser(req.username), pw = String(req.password || '');
@@ -287,7 +284,7 @@ const PUBLIC = {
     const ok = u && /^[a-f0-9]{64}$/.test(pw) && timingEq(await scrypt(pw, u.salt), u.hash);
     if (!ok) { if (!u) await scrypt('x', 'y'); noteFail(username); throw new E('bad_login', 'Wrong username or password'); }
     loginFails.delete(username);
-    return { ok: true, token: createSession(u.uid, req.ua), uid: u.uid, me: userOut(u), ksalt: q.getMeta.get('ksalt').value, kc: q.getMeta.get('kc').value };
+    return { ok: true, token: createSession(u.uid, req.ua), uid: u.uid, me: userOut(u), ...keyInfo() };
   },
 };
 
@@ -303,16 +300,7 @@ const ACTIONS = {
   sync(req, ctx) {
     const rows = q.recent.all({ u: ctx.uid, n: 600 });
     const maxUpd = q.maxUpd.get({ u: ctx.uid }).m;
-    return { ok: true, now: Date.now(), msgs: rows.map((r) => msgOut(r, ctx.uid)), maxUpd, users: q.allUsers.all().map(userOut), pv: getPv(), peers: peersFor(ctx.uid), vapid: VAPID.publicKey, sc: getSc() };
-  },
-  scset(req, ctx) {
-    const r = req.rec || {};
-    const i = Number(r.i), n = Number(r.n);
-    if (!/^[a-f0-9]{32}$/.test(String(r.s || '')) || !/^[a-f0-9]{64}$/.test(String(r.h || '')) || !(i >= 50000 && i <= 600000) || !(n >= 6 && n <= 64)) throw new E('bad_code', 'Invalid secret code record');
-    const rec = { s: r.s, h: r.h, i, n, ts: Date.now() };
-    q.setMeta.run('sc', JSON.stringify(rec));
-    for (const uid of uidList()) emitTo(uid, 'sc', rec, uid === ctx.uid ? ctx.sid : undefined);
-    return { ok: true, rec };
+    return { ok: true, now: Date.now(), msgs: rows.map((r) => msgOut(r, ctx.uid)), maxUpd, users: q.allUsers.all().map(userOut), pv: getPv(), peers: peersFor(ctx.uid), vapid: VAPID.publicKey, ...keyInfo() };
   },
   poll(req, ctx) {                       // reconnect ke baad "kya miss hua" catch-up
     const since = Number(req.since) || 0;
@@ -384,6 +372,64 @@ const ACTIONS = {
     const row = q.msgById.get(m.id);
     emitTo(ctx.uid, 'upd', { msgs: [msgOut(row, ctx.uid)] }, ctx.sid);   // star sirf mere devices ke liye
     return { ok: true, msg: msgOut(row, ctx.uid) };
+  },
+  keyinit(req, ctx) {                    // very first unlock ever: the first device to unlock creates the check value (only once)
+    if (q.getMeta.get('kc')) throw new E('key_exists', 'The key is already set');
+    const ksalt = String(req.ksalt || ''), kc = String(req.kc || '');
+    if (!/^[a-f0-9]{32}$/.test(ksalt) || !kc || kc.length > 500) throw new E('bad_key', 'Invalid key data');
+    q.setMeta.run('ksalt', ksalt); q.setMeta.run('kc', kc); q.setMeta.run('kver', '1');
+    for (const uid of uidList()) emitTo(uid, 'keyinfo', keyInfo(), uid === ctx.uid ? ctx.sid : undefined);
+    return { ok: true, ...keyInfo() };
+  },
+  /** Everything that is encrypted with the unlock code: used by "Change secret code" to re-encrypt it all. */
+  dump() {
+    const msgs = q.allMsgs.all().filter((r) => !r.deleted && r.payload).map((r) => ({ id: r.id, payload: r.payload, reacts: parseReacts(r.reacts) }));
+    const users = q.allUsers.all().map((u) => ({ uid: u.uid, nameEnc: u.nameEnc, aboutEnc: u.aboutEnc, photoEnc: u.photoEnc }));
+    const files = q.allFiles.all().map((x) => ({ fileId: x.fileId }));
+    return { ok: true, msgs, users, files, ...keyInfo() };
+  },
+  /** Step 1 of a code change, per file: the re-encrypted bytes are parked next to the original (<id>.rk). */
+  rekeyfile(req, ctx) {
+    const f = q.fileById.get(String(req.fileId || ''));
+    if (!f) throw new E('not_found');
+    if (f.frm !== ctx.uid && f.rcv !== ctx.uid) throw new E('forbidden');
+    const data = String(req.data || '');
+    if (!data || data.length > MAX_UPLOAD_B64) throw new E('too_big', 'That file is too large (max about 6 MB)');
+    fs.writeFileSync(path.join(DATA_DIR, 'files', f.fileId + '.rk'), Buffer.from(data, 'base64'), { mode: 0o600 });
+    return { ok: true };
+  },
+  /** Step 2: swap every ciphertext to the new key in ONE transaction. Refused if anything changed meanwhile ("stale"). */
+  rekey(req, ctx) {
+    const stale = () => new E('stale', 'Something changed while re-encrypting. Please try again.');
+    const cur = keyInfo();
+    if (Number(req.baseVer) !== cur.kver) throw stale();
+    const ksalt = String(req.ksalt || ''), kc = String(req.kc || '');
+    if (!/^[a-f0-9]{32}$/.test(ksalt) || !kc || kc.length > 500) throw new E('bad_key', 'Invalid key data');
+    const inMsgs = Array.isArray(req.msgs) ? req.msgs : [], inUsers = Array.isArray(req.users) ? req.users : [], inFiles = Array.isArray(req.files) ? req.files.map(String) : [];
+    const rows = q.allMsgs.all().filter((r) => !r.deleted && r.payload);
+    const ids = new Set(rows.map((r) => r.id));
+    if (inMsgs.length !== rows.length || new Set(inMsgs.map((m) => m && m.id)).size !== rows.length) throw stale();
+    for (const m of inMsgs) {
+      if (!m || !ids.has(m.id) || typeof m.payload !== 'string' || !m.payload || m.payload.length > MAX_PAYLOAD) throw stale();
+      for (const k of Object.keys(m.reacts || {})) if (typeof m.reacts[k] !== 'string' || m.reacts[k].length > 400) throw stale();
+    }
+    const urows = q.allUsers.all();
+    if (inUsers.length !== urows.length || !inUsers.every((u) => urows.some((r) => r.uid === u.uid))) throw stale();
+    const chk = (v, max) => { v = String(v || ''); if (v.length > max) throw stale(); return v; };
+    const frows = q.allFiles.all().map((x) => x.fileId);
+    if (inFiles.length !== frows.length || !frows.every((x) => inFiles.includes(x))) throw stale();
+    for (const id of frows) if (!fs.existsSync(path.join(DATA_DIR, 'files', id + '.rk'))) throw stale();
+    db.transaction(() => {
+      for (const m of inMsgs) q.rekeyMsg.run(m.payload, Object.keys(m.reacts || {}).length ? JSON.stringify(m.reacts) : '', nextUpd(), m.id);
+      const now = Date.now();
+      for (const u of inUsers) q.setEnc.run(chk(u.nameEnc, 2000), chk(u.aboutEnc, 4000), chk(u.photoEnc, 45000), now, u.uid);
+      q.setMeta.run('ksalt', ksalt); q.setMeta.run('kc', kc); q.setMeta.run('kver', String(cur.kver + 1));
+    })();
+    for (const id of frows) fs.renameSync(path.join(DATA_DIR, 'files', id + '.rk'), path.join(DATA_DIR, 'files', id));
+    const pv = bumpPv();
+    const info = keyInfo();
+    for (const uid of uidList()) { emitTo(uid, 'keyinfo', info, uid === ctx.uid ? ctx.sid : undefined); emitTo(uid, 'pv', { pv }, uid === ctx.uid ? ctx.sid : undefined); }
+    return { ok: true, ...info };
   },
   react(req, ctx) {                      // emoji reaction (encrypted). enc='' => remove my reaction
     const m = q.msgById.get(String(req.id || ''));
@@ -532,7 +578,7 @@ setInterval(() => { try { q.purgeSessions.run(Date.now()); } catch (e) { /* igno
 process.on('unhandledRejection', (e) => console.error('unhandledRejection', e));
 
 if (require.main === module) {
-  server.listen(PORT, '0.0.0.0', () => console.log(`Galaxy Relax v3 listening on :${PORT}  data=${DATA_DIR}  origins=${ORIGINS.join(',')}`));
+  server.listen(PORT, '0.0.0.0', () => console.log(`Galaxy Relax v4 listening on :${PORT}  data=${DATA_DIR}  origins=${ORIGINS.join(',')}`));
   const stop = () => { io.close(); server.close(); try { db.close(); } catch (e) { /* ignore */ } process.exit(0); };
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
 }

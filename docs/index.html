@@ -4,12 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Galaxy Relax</title>
-<meta name="description" content="Galaxy Relax - drift through a calm 3D night sky">
-<meta name="theme-color" content="#0B0E1A">
-<meta name="color-scheme" content="dark">
+<meta name="description" content="Galaxy Relax - drift through a calm 3D sky">
+<meta name="theme-color" content="#FAF7F2">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Galaxy Relax">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
@@ -17,13 +16,24 @@
 <link rel="preload" href="fonts/sora.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/manrope.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/style.css">
+<script>
+  // pick the theme before the first paint (Light by default; Auto = Light 6 AM to 7 PM)
+  (function () {
+    try {
+      var s = JSON.parse(localStorage.getItem('mychat.settings') || '{}'), t = s.theme || 'light';
+      if (t === 'auto') { var h = new Date().getHours(); t = h >= 6 && h < 19 ? 'light' : 'dark'; }
+      document.documentElement.dataset.theme = t === 'dark' ? 'dark' : 'light';
+      if (t === 'dark') document.querySelector('meta[name=theme-color]').content = '#0A0A0C';
+    } catch (e) { document.documentElement.dataset.theme = 'light'; }
+  })();
+</script>
 </head>
 <body>
 
 <!-- Splash -->
 <div id="splash"><div class="sp-planet"><img src="icons/logo.svg" alt="" width="96" height="96"></div><div class="splash-name">Galaxy Relax</div><div class="splash-bar"><i></i></div><div class="splash-lock">Breathe in. Breathe out.</div></div>
 
-<!-- Login / sign up -->
+<!-- Login / join -->
 <div id="auth" class="screen hidden">
   <div class="nebula" aria-hidden="true"></div>
   <div class="auth-top"><img src="icons/logo.svg" alt="" width="34" height="34"><span>Galaxy Relax</span></div>
@@ -35,31 +45,11 @@
       <label class="fld"><span>Username</span><input id="f-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="20" placeholder="e.g. nova"></label>
       <label class="fld su"><span>Explorer name</span><input id="f-name" autocomplete="nickname" maxlength="40" placeholder="The name your companion sees"></label>
       <label class="fld"><span>Password</span><div class="pw"><input id="f-pass" name="password" type="password" autocomplete="current-password" maxlength="100" placeholder="At least 6 characters"><button type="button" id="pw-eye" class="icon-btn" aria-label="Show password"></button></div></label>
-      <label class="fld su"><span>Galaxy Key <em>(the same for both explorers)</em></span><input id="f-secret" type="password" autocomplete="off" maxlength="100" placeholder="A shared key. Keep it to yourselves"></label>
-      <p class="hint su"><span id="hint-ic"></span><span>Your Galaxy Key never leaves this device and is never sent to the server. <b>If you forget it, nothing can be recovered.</b></span></p>
       <div id="auth-err" class="err hidden" role="alert"></div>
       <button id="auth-submit" class="btn gold" type="submit"><span>Log in</span><i class="spin"></i></button>
     </form>
   </div>
   <div class="auth-foot"><span id="foot-ic"></span> Calm. Private. Yours.</div>
-</div>
-
-<!-- Galaxy Key prompt -->
-<div id="keyscreen" class="screen hidden">
-  <div class="nebula" aria-hidden="true"></div>
-  <div class="auth-top"><img src="icons/logo.svg" alt="" width="34" height="34"><span>Galaxy Relax</span></div>
-  <div class="auth-card">
-    <div class="key-ic" id="key-ic"></div>
-    <h1>Enter your Galaxy Key</h1>
-    <p class="muted">This is the first time on this device. Enter the <b>shared Galaxy Key</b> you both chose when you joined.</p>
-    <form id="key-form" novalidate>
-      <label class="fld"><span>Galaxy Key</span><input id="k-secret" type="password" autocomplete="off" maxlength="100" placeholder="Shared key"></label>
-      <label class="chk"><input id="k-remember" type="checkbox" checked><span>Remember it on this device (encrypted with your password)</span></label>
-      <div id="key-err" class="err hidden" role="alert"></div>
-      <button id="key-submit" class="btn gold" type="submit"><span>Continue</span><i class="spin"></i></button>
-      <button id="key-logout" class="btn ghost" type="button">Log out</button>
-    </form>
-  </div>
 </div>
 
 <!-- Connection problem -->
@@ -73,32 +63,47 @@
   </div>
 </div>
 
-<!-- DECOY: the 3D night sky. The unlock box is the "Name your planet" input. -->
+<!-- DECOY: the 3D sky. The unlock box is the "Name your planet" input. -->
 <div id="decoy" class="hidden" aria-label="Galaxy Relax">
+  <canvas id="dc-night" aria-hidden="true"></canvas>
+  <div id="dc-air" class="dc-air" aria-hidden="true"></div>
   <canvas id="sky"></canvas>
   <div class="dc-top">
-    <div><div class="dc-hi" id="dc-hi">Good evening</div><div class="dc-ttl">Your quiet sky</div></div>
-    <button id="dc-sleep" class="icon-btn" type="button" aria-label="Sleep"></button>
+    <div><div class="dc-hi" id="dc-hi">Good morning</div><div class="dc-ttl">Your quiet sky</div></div>
+    <button id="dc-sleep" class="glass-btn" type="button" aria-label="Sleep"></button>
   </div>
   <div id="dc-star" class="dc-star" aria-hidden="true"></div>
   <div class="dc-hint">Drag to turn &middot; Pinch to zoom</div>
   <div class="dc-field"><div class="dc-pill">
-    <input id="dc-input" type="password" name="planet-name" placeholder="Name your planet..." aria-label="Name your planet" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" data-lpignore="true" data-1p-ignore="true" maxlength="64">
+    <input id="dc-input" type="text" name="planet-name" placeholder="Name your planet..." aria-label="Name your planet" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" inputmode="text" data-lpignore="true" data-1p-ignore="true" data-form-type="other" maxlength="64">
     <button id="dc-go" class="dc-go" type="button" aria-label="Name planet"></button>
   </div></div>
   <div class="dc-warp" aria-hidden="true"></div>
 </div>
 
-<!-- Main app (private area; removed from the page while hidden) -->
+<!-- Private area (removed from the page while the sky shows) -->
 <div id="app" class="hidden">
   <div id="conn-banner" class="conn-banner hidden">Reconnecting&hellip;</div>
+  <div class="orbs" aria-hidden="true"><i></i><i></i><i></i></div>
+
+  <!-- desktop: slim icon rail (replaces the usual list pane) -->
+  <nav id="rail" class="rail" aria-label="Menu">
+    <div class="rail-logo"><span id="rail-logo-ic"></span></div>
+    <button id="rail-chat" class="rail-btn on" aria-label="Conversation" title="Conversation"></button>
+    <button id="rail-sky" class="rail-btn" aria-label="Back to the sky" title="Back to the sky"></button>
+    <button id="rail-theme" class="rail-btn" aria-label="Appearance" title="Appearance"></button>
+    <button id="rail-star" class="rail-btn" aria-label="Starred messages" title="Starred messages"></button>
+    <span class="rail-sp"></span>
+    <button id="rail-settings" class="rail-btn" aria-label="Settings" title="Settings"></button>
+    <button id="rail-me" class="rail-me" aria-label="Profile" title="Profile"></button>
+  </nav>
 
   <aside id="sidebar">
     <header class="sb-head">
       <button id="btn-me" class="avatar-btn" aria-label="Profile"></button>
       <div class="sb-title">Chats</div>
       <div class="sb-actions">
-        <button id="btn-theme" class="icon-btn" aria-label="Themes" title="Themes"></button>
+        <button id="btn-theme" class="icon-btn" aria-label="Appearance" title="Appearance"></button>
         <button id="btn-starred" class="icon-btn" aria-label="Starred messages" title="Starred messages"></button>
         <button id="btn-menu" class="icon-btn" aria-label="Menu" title="Menu"></button>
       </div>
@@ -117,7 +122,6 @@
   </aside>
 
   <main id="main">
-    <div id="skin-bg" class="skin-bg" aria-hidden="true"></div>
     <section id="empty-state" class="empty-state">
       <img src="icons/logo.svg" alt="" width="96" height="96">
       <h2>Galaxy Relax</h2>
@@ -127,7 +131,6 @@
 
     <section id="chat" class="chat hidden">
       <header class="ch-head">
-        <div class="hearts" aria-hidden="true"></div>
         <button id="btn-back" class="icon-btn back" aria-label="Back"></button>
         <button id="ch-info" class="ch-info" type="button">
           <div id="ch-avatar" class="avatar"></div>
@@ -174,6 +177,9 @@
       </footer>
     </section>
   </main>
+
+  <!-- desktop: profile card of the other person -->
+  <aside id="person" class="person"></aside>
 </div>
 
 <!-- Overlays -->

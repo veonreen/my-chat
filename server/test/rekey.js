@@ -1,0 +1,96 @@
+// Key actions + fresh-start tool. Run: node test/rekey.js
+const { spawn, spawnSync } = require('child_process');
+const path = require('path'), fs = require('fs'), os = require('os');
+const Database = require('better-sqlite3');
+const { io } = require('socket.io-client');
+const PORT = 3997, URL = `http://127.0.0.1:${PORT}`, ORIGIN = 'https://veonreen.github.io';
+const data = fs.mkdtempSync(path.join(os.tmpdir(), 'mychat-rekey-'));
+let pass = 0, fail = 0;
+const t = (n, c, x) => { c ? pass++ : fail++; console.log(c ? '  PASS' : '  FAIL', n, c ? '' : JSON.stringify(x ?? '').slice(0, 200)); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const hex = (c) => c.repeat(64);
+const post = async (b) => (await (await fetch(URL + '/api', { method: 'POST', headers: { 'Content-Type': 'text/plain', Origin: ORIGIN }, body: JSON.stringify(b) })).json());
+const sock = (token) => new Promise((res, rej) => { const s = io(URL, { auth: { token, vis: true }, transports: ['websocket'], extraHeaders: { Origin: ORIGIN }, reconnection: false }); s.on('connect', () => res(s)); s.on('connect_error', rej); });
+const rpc = (s, action, d = {}) => new Promise((res) => s.emit('rpc', { action, ...d }, res));
+const waitEv = (s, ev, pred = () => true, ms = 3000) => new Promise((res) => { const to = setTimeout(() => { s.off(ev, h); res(null); }, ms); const h = (d) => { if (pred(d)) { clearTimeout(to); s.off(ev, h); res(d); } }; s.on(ev, h); });
+const KS = 'a1'.repeat(16), KS2 = 'b2'.repeat(16);
+
+(async () => {
+  const srv = spawn(process.execPath, ['server.js'], { env: { ...process.env, PORT, DATA_DIR: data }, stdio: ['ignore', 'inherit', 'inherit'] });
+  await sleep(1800);
+
+  console.log('\n[key material]');
+  const A = await post({ action: 'signup', username: 'alice', password: hex('a') });
+  const B = await post({ action: 'signup', username: 'bob', password: hex('b') });
+  t('signup works without any secret key', A.ok && B.ok && A.kver === 0 && !A.kc);
+  t('config says no key yet', (await post({ action: 'config' })).hasKey === false);
+  const sa = await sock(A.token), sb = await sock(B.token);
+  t('keyinit rejects bad salt', (await rpc(sa, 'keyinit', { ksalt: 'zz', kc: 'x' })).error === 'bad_key');
+  const evB = waitEv(sb, 'keyinfo', (d) => d.kver === 1);
+  const k1 = await rpc(sa, 'keyinit', { ksalt: KS, kc: 'CHECK-1' });
+  t('first unlock creates salt + check value (version 1)', k1.ok && k1.kver === 1 && k1.ksalt === KS && k1.kc === 'CHECK-1', k1);
+  t('the other device is told live', !!(await evB));
+  t('second keyinit refused (key already set)', (await rpc(sb, 'keyinit', { ksalt: KS2, kc: 'EVIL' })).error === 'key_exists');
+  const lg = await post({ action: 'login', username: 'bob', password: hex('b') });
+  t('login returns the key info', lg.ok && lg.kver === 1 && lg.kc === 'CHECK-1' && lg.ksalt === KS, lg);
+  t('server stores no hash of the code (meta has only salt, check value, version)', (() => { const d = new Database(path.join(data, 'mychat.db'), { readonly: true }); const keys = d.prepare('SELECT key FROM meta').all().map((r) => r.key).sort().join(','); d.close(); return !/proofHash|^sc|,sc/.test(keys); })());
+
+  console.log('\n[dump + rekey]');
+  await rpc(sa, 'send', { id: 'mkey00000001', to: B.uid, type: 'text', payload: 'OLD-P1' });
+  await rpc(sb, 'send', { id: 'mkey00000002', to: A.uid, type: 'text', payload: 'OLD-P2' });
+  await rpc(sb, 'react', { id: 'mkey00000001', enc: 'OLD-RX' });
+  await rpc(sa, 'profile', { nameEnc: 'OLD-NAME-A' });
+  const up = await post({ action: 'upload', token: A.token, data: Buffer.from('OLDFILE').toString('base64') });
+  await rpc(sa, 'send', { id: 'mkey00000003', to: B.uid, type: 'file', payload: 'OLD-P3', fileId: up.fileId });
+  const d = await rpc(sa, 'dump');
+  t('dump returns every ciphertext', d.ok && d.msgs.length === 3 && d.users.length === 2 && d.files.length === 1 && d.kver === 1, d);
+  t('dump includes reactions', d.msgs.find((m) => m.id === 'mkey00000001').reacts[B.uid] === 'OLD-RX');
+
+  const newMsgs = d.msgs.map((m) => ({ id: m.id, payload: 'NEW-' + m.payload, reacts: Object.fromEntries(Object.entries(m.reacts).map(([k, v]) => [k, 'NEW-' + v])) }));
+  const newUsers = d.users.map((u) => ({ uid: u.uid, nameEnc: u.nameEnc ? 'NEW-' + u.nameEnc : '', aboutEnc: '', photoEnc: '' }));
+  t('commit without parked files is refused', (await rpc(sa, 'rekey', { baseVer: 1, ksalt: KS2, kc: 'CHECK-2', msgs: newMsgs, users: newUsers, files: [up.fileId] })).error === 'stale');
+  t('rekeyfile parks new bytes', (await rpc(sa, 'rekeyfile', { fileId: up.fileId, data: Buffer.from('NEWFILE').toString('base64') })).ok);
+  t('wrong base version refused', (await rpc(sa, 'rekey', { baseVer: 0, ksalt: KS2, kc: 'CHECK-2', msgs: newMsgs, users: newUsers, files: [up.fileId] })).error === 'stale');
+  t('incomplete message list refused', (await rpc(sa, 'rekey', { baseVer: 1, ksalt: KS2, kc: 'CHECK-2', msgs: newMsgs.slice(1), users: newUsers, files: [up.fileId] })).error === 'stale');
+  // a message that arrives while the client is re-encrypting makes the commit stale
+  await rpc(sb, 'send', { id: 'mkey00000004', to: A.uid, type: 'text', payload: 'LATE' });
+  t('a message that arrived meanwhile makes the commit stale', (await rpc(sa, 'rekey', { baseVer: 1, ksalt: KS2, kc: 'CHECK-2', msgs: newMsgs, users: newUsers, files: [up.fileId] })).error === 'stale');
+  const d2 = await rpc(sa, 'dump');
+  const msgs2 = d2.msgs.map((m) => ({ id: m.id, payload: 'NEW-' + m.payload, reacts: Object.fromEntries(Object.entries(m.reacts).map(([k, v]) => [k, 'NEW-' + v])) }));
+  const evB2 = waitEv(sb, 'keyinfo', (x) => x.kver === 2);
+  const ok = await rpc(sa, 'rekey', { baseVer: 1, ksalt: KS2, kc: 'CHECK-2', msgs: msgs2, users: newUsers, files: [up.fileId] });
+  t('rekey commits (version 2)', ok.ok && ok.kver === 2 && ok.ksalt === KS2 && ok.kc === 'CHECK-2', ok);
+  t('the other phone is told, so it can ask for the new code', !!(await evB2));
+  const d3 = await rpc(sb, 'dump');
+  t('all payloads are now the new ciphertext', d3.msgs.every((m) => m.payload.startsWith('NEW-')) && d3.msgs.length === 4, d3.msgs.map((m) => m.payload));
+  t('reactions were re-encrypted too', d3.msgs.find((m) => m.id === 'mkey00000001').reacts[B.uid] === 'NEW-OLD-RX');
+  t('profile fields swapped', d3.users.find((u) => u.uid === A.uid).nameEnc === 'NEW-OLD-NAME-A');
+  const fl = await rpc(sb, 'file', { fileId: up.fileId });
+  t('file bytes swapped', fl.ok && Buffer.from(fl.data, 'base64').toString() === 'NEWFILE');
+  t('no .rk leftovers', fs.readdirSync(path.join(data, 'files')).every((x) => !x.endsWith('.rk')));
+  t('old base version can no longer commit', (await rpc(sb, 'rekey', { baseVer: 1, ksalt: KS, kc: 'X', msgs: [], users: [], files: [] })).error === 'stale');
+  t('rekey needs a login', (await post({ action: 'rekey', baseVer: 2, token: 'x'.repeat(40) })).error === 'auth');
+
+  console.log('\n[fresh-start tool]');
+  sa.close(); sb.close(); srv.kill(); await sleep(800);
+  const KS3 = 'c3'.repeat(16);
+  const refuse = spawnSync(process.execPath, ['tools/fresh-start.js', data, KS3, 'CHECK-3'], { encoding: 'utf8' });
+  t('refuses without CONFIRM=yes', refuse.status === 2);
+  const run = spawnSync(process.execPath, ['tools/fresh-start.js', data, KS3, 'CHECK-3'], { encoding: 'utf8', env: { ...process.env, CONFIRM: 'yes' } });
+  const rep = JSON.parse((run.stdout || '{}').trim().split('\n').pop() || '{}');
+  t('wipes messages, files and sessions, keeps both accounts', run.status === 0 && rep.after.messages === 0 && rep.after.files === 0 && rep.after.sessions === 0 && rep.after.users === 2 && rep.before.messages === 4, run.stdout + run.stderr);
+  const chk = new Database(path.join(data, 'mychat.db'), { readonly: true });
+  const meta = Object.fromEntries(chk.prepare('SELECT key, value FROM meta').all().map((r) => [r.key, r.value]));
+  const users = chk.prepare('SELECT username, hash, nameEnc FROM users').all();
+  chk.close();
+  t('new key material installed (version 1)', meta.ksalt === KS3 && meta.kc === 'CHECK-3' && meta.kver === '1' && !meta.proofHash);
+  t('accounts keep their password hash, profile text cleared', users.length === 2 && users.every((u) => u.hash && u.nameEnc === ''));
+  t('no file blobs left', fs.readdirSync(path.join(data, 'files')).length === 0);
+  const srv2 = spawn(process.execPath, ['server.js'], { env: { ...process.env, PORT, DATA_DIR: data }, stdio: ['ignore', 'inherit', 'inherit'] });
+  await sleep(1800);
+  const again = await post({ action: 'login', username: 'alice', password: hex('a') });
+  t('after the wipe: the same password still logs in and gets the new key info', again.ok && again.kver === 1 && again.ksalt === KS3 && again.kc === 'CHECK-3', again);
+  srv2.kill();
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();

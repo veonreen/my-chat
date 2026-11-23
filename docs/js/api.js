@@ -10,7 +10,7 @@
   class ApiError extends Error {
     constructor(code, msg) { super(msg || code); this.code = code; }
   }
-  const HTTP_ONLY = { config: 1, login: 1, signup: 1, upload: 1, file: 1 };
+  const HTTP_ONLY = { config: 1, login: 1, signup: 1, upload: 1, file: 1, dump: 1, rekey: 1, rekeyfile: 1 };   // big payloads go over plain HTTP
 
   const api = (MC.api = {
     token: null,
@@ -47,7 +47,7 @@
           if (first) { first = false; s.close(); reject(new ApiError('network', 'Cannot reach the server')); }
           else api._emit('state', false);
         });
-        ['upd', 'peers', 'typing', 'pv', 'revoked', 'sc'].forEach((ev) => s.on(ev, (d) => api._emit(ev, d)));
+        ['upd', 'peers', 'typing', 'pv', 'revoked', 'keyinfo'].forEach((ev) => s.on(ev, (d) => api._emit(ev, d)));
       });
     },
     disconnect() {

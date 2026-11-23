@@ -1,4 +1,4 @@
-/* Galaxy Relax: private area UI (conversation list, messages, composer, menus, settings).
+/* Galaxy Relax v4: private area UI (conversation, composer, menus, settings; desktop: icon rail + profile card).
  * ui.sleep() removes the whole private area from the page (used when the decoy sky is showing);
  * ui.start() brings it back. While asleep nothing here renders, so no message exists in the DOM. */
 (function () {
@@ -13,7 +13,7 @@
   const seps = new Map();       // dayKey -> element
   let forceStick = false, loadingOlder = false, sbSig = '';
   let matches = [], matchIdx = -1;
-  let appEl = null, appNext = null, olderNode = null, typingNode = null;
+  let appEl = null, appNext = null, olderNode = null, typingNode = null, personSig = '';
   const REACTIONS = ['😂', '🔥', '👍', '😮', '😢', '❤️'];
 
   MC.showScreen = function (name) {
@@ -31,45 +31,27 @@
       'sb-search', 'sb-search-clear', 'sb-search-ic', 'chat-list', 'sb-lock', 'empty-state', 'empty-lock', 'chat', 'btn-back', 'ch-info',
       'ch-avatar', 'ch-name', 'ch-status', 'btn-search', 'btn-chmenu', 'msg-search', 'ms-close', 'ms-ic', 'ms-input', 'ms-count', 'ms-up', 'ms-down',
       'msgs-wrap', 'msgs', 'scroll-down', 'sd-ic', 'sd-count', 'drop-hint', 'reply-bar', 'composer', 'comp-row', 'btn-emoji', 'btn-attach',
-      'input', 'btn-send', 's-mic', 's-send', 'rec-row', 'rec-cancel', 'rec-time', 'rec-send', 'emoji-panel', 'conn-banner', 'skin-bg'];
+      'input', 'btn-send', 's-mic', 's-send', 'rec-row', 'rec-cancel', 'rec-time', 'rec-send', 'emoji-panel', 'conn-banner', 'rail-chat', 'rail-sky', 'rail-theme', 'rail-star', 'rail-settings', 'rail-me', 'rail-logo-ic', 'person'];
     ids.forEach((id) => { el[id.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = document.getElementById(id); });
   }
 
   function fillIcons() {
     const set = (node, name) => { if (node) node.innerHTML = u.ic(name); };
-    set(el.btnTheme, 'palette'); set(el.btnStarred, 'star'); set(el.btnMenu, 'more');
+    set(el.btnStarred, 'star'); set(el.btnMenu, 'more');
     set(el.nbIc, 'bell'); set(el.nbX, 'close'); set(el.sbSearchIc, 'search'); set(el.sbSearchClear, 'close');
     set(el.sbLock, 'lock'); set(el.emptyLock, 'lock'); set(el.btnBack, 'back');
     set(el.btnSearch, 'search'); set(el.btnChmenu, 'more'); set(el.msClose, 'close'); set(el.msIc, 'search');
     set(el.msUp, 'up'); set(el.msDown, 'down'); set(el.sdIc, 'down'); set(el.btnEmoji, 'emoji'); set(el.btnAttach, 'attach');
     set(el.sMic, 'mic'); set(el.sSend, 'send'); set(el.recCancel, 'trash'); set(el.recSend, 'send');
+    set(el.railLogoIc, 'orbit'); set(el.railChat, 'emoji'); set(el.railSky, 'moonStar'); set(el.railStar, 'star'); set(el.railSettings, 'settings');
   }
 
-  // coral hearts drifting up behind the conversation header
-  function buildHearts() {
-    const box = document.querySelector('#chat .hearts'); if (!box) return;
-    const svg = '<svg viewBox="0 0 24 24"><path d="M12 21s-8-5.2-8-11a4.6 4.6 0 0 1 8-3 4.6 4.6 0 0 1 8 3c0 5.8-8 11-8 11z"/></svg>';
-    const xs = [6, 17, 29, 41, 53, 64, 76, 88], rnd = (a, b) => a + Math.random() * (b - a);
-    box.innerHTML = xs.map((x, i) => `<i style="--x:${x + rnd(-3, 3).toFixed(1)}%;--s:${Math.round(rnd(9, 17))}px;--d:${rnd(9, 15).toFixed(1)}s;--dl:${(-rnd(0, 12)).toFixed(1)}s;--dx:${Math.round(rnd(-14, 14))}px;--r:${Math.round(rnd(-25, 25))}deg">${svg}</i>`).join('');
-  }
-
-  // animated backdrop per skin (a handful of nodes, all CSS-animated with transform/opacity)
-  function skinDom(skin) {
-    if (skin === 'neon') return '<i class="o1"></i><i class="o2"></i><i class="gr"></i>';
-    if (skin === 'sunset') return '<i class="su"></i><i class="sw"></i>';
-    if (skin === 'ocean') {
-      let b = '<i class="w1"></i><i class="w2"></i>';
-      for (let i = 0; i < 7; i++) b += `<i class="bb" style="--x:${8 + i * 13}%;--s:${6 + (i * 5) % 9}px;--d:${9 + (i * 3) % 7}s;--dl:${-(i * 2.3).toFixed(1)}s"></i>`;
-      return b;
-    }
-    return '<i class="n1"></i><i class="n2"></i><i class="st"></i><i class="st2"></i>';
-  }
   ui.themeChanged = function () {
-    if (!el.skinBg) return;
-    const s = core.resolvedTheme();
-    el.skinBg.className = 'skin-bg sk-' + s;
-    el.skinBg.innerHTML = skinDom(s);
+    const dark = core.resolvedTheme() === 'dark', ic = u.ic(dark ? 'sun' : 'moon');
+    if (el.btnTheme) el.btnTheme.innerHTML = ic;
+    if (el.railTheme) el.railTheme.innerHTML = ic;
   };
+  const quickTheme = () => { core.setTheme(core.resolvedTheme() === 'dark' ? 'light' : 'dark'); u.haptic(8); };
 
   /** Take the (still empty) private area out of the page before it has ever been shown. */
   ui.park = function () {
@@ -81,7 +63,7 @@
     if (!appEl) appEl = document.getElementById('app');
     if (appEl && !appEl.isConnected) document.body.insertBefore(appEl, appNext && appNext.isConnected ? appNext : document.getElementById('overlay-root'));
     if (!ui.built) {
-      cacheEls(); fillIcons(); bindEvents(); buildEmojiPanel(); buildHearts(); setVh();
+      cacheEls(); fillIcons(); bindEvents(); buildEmojiPanel(); setVh();
       ui.built = true;
     }
     MC.showScreen('app');
@@ -112,6 +94,7 @@
     el.msgSearch.classList.add('hidden'); el.msCount.textContent = '';
     el.chName.textContent = ''; el.chStatus.textContent = ''; el.chAvatar.replaceChildren(); el.btnMe.replaceChildren();
     el.replyBar.replaceChildren(); el.replyBar.classList.add('hidden');
+    if (el.person) el.person.replaceChildren(); personSig = '';
     el.composer.classList.remove('emoji-open', 'has-text', 'recording');
     el.chat.classList.add('hidden'); el.emptyState.classList.remove('hidden');
     document.body.classList.remove('chat-open', 'privacy');
@@ -200,7 +183,7 @@
     }
     if (!shown) {
       frag.append(h('div', { class: 'sb-empty' },
-        q ? 'Nothing found' : peers.length ? '' : 'Nobody else has joined yet.\nShare the link and ask them to join with the same Galaxy Key.'));
+        q ? 'Nothing found' : peers.length ? '' : 'Nobody else has joined yet.\nShare the link and ask them to join.'));
     }
     el.chatList.replaceChildren(frag);
   };
@@ -210,6 +193,7 @@
     if (!ui.ready || !el.btnMe) return;
     el.btnMe.innerHTML = '';
     el.btnMe.append(u.avatar(S.me));
+    if (el.railMe) { el.railMe.innerHTML = ''; el.railMe.append(u.avatar(S.me)); }
     if (S.current) fillHeader();
   };
 
@@ -219,23 +203,54 @@
   }
 
   // ================= Open / close conversation =================
-  function fillHeader() {
-    const p = S.users.get(S.current);
-    if (!p) return;
-    u.fillAvatar(el.chAvatar, p, { teal: true });
-    el.chName.textContent = p.name;
-    ui.updateStatus();
-  }
-  ui.updateStatus = function () {
-    if (!ui.ready || !S.current || !el.chStatus) return;
+  function statusInfo() {
     const p = S.users.get(S.current), pr = S.peers[S.current];
     let txt = '', cls = '';
     if (pr && pr.typingTo === S.uid) { txt = 'typing'; cls = 'typing'; }
     else if (pr && pr.online) { txt = 'online'; cls = 'online'; }
     else if (pr && pr.lastSeen > 1000) txt = u.lastSeen(pr.lastSeen);
     else if (p && p.lastSeen > 1000) txt = u.lastSeen(p.lastSeen);
+    return { txt, cls };
+  }
+  function fillHeader() {
+    const p = S.users.get(S.current);
+    if (!p) return;
+    u.fillAvatar(el.chAvatar, p);
+    el.chName.textContent = p.name;
+    ui.updateStatus();
+    ui.renderPerson();
+  }
+  ui.updateStatus = function () {
+    if (!ui.ready || !S.current || !el.chStatus) return;
+    const { txt, cls } = statusInfo();
     if (el.chStatus.textContent !== txt) el.chStatus.textContent = txt;
     el.chStatus.className = 'ch-status ' + cls;
+    const sub = el.person && el.person.querySelector('.sub'); if (sub && sub.textContent !== (txt || ' ')) sub.textContent = txt || ' ';
+  };
+  /** Desktop only (>= 1180 px): the other person's card. Rebuilt only when something it shows has changed. */
+  ui.renderPerson = function () {
+    if (!ui.ready || !el.person) return;
+    const p = S.users.get(S.current);
+    if (!p) { el.person.replaceChildren(); personSig = ''; return; }
+    const imgs = (S.msgs.get(S.current) || []).filter((m) => m.type === 'image' && !m.deleted && m.f && m.f.th).slice(-6).reverse();
+    const sig = [p.uid, p.name, p.about, imgs.map((m) => m.id).join(',')].join('|');
+    if (sig === personSig && el.person.childNodes.length) return;
+    personSig = sig;
+    const big = u.avatar(p, 104); big.classList.add('big');
+    const shared = h('div', { class: 'shared' });
+    for (let i = 0; i < 6; i++) {
+      const m = imgs[i], t = h('i', { class: m ? 'has' : '', onclick: m ? () => lightbox(m) : null });
+      if (m) core.getFileUrl(m).then((url) => { t.style.backgroundImage = 'url("' + url + '")'; }).catch(() => {});
+      shared.append(t);
+    }
+    el.person.replaceChildren(big, h('h3', {}, p.name), h('div', { class: 'sub' }, statusInfo().txt || ' '),
+      h('div', { class: 'abt' }, p.about || 'Say hello.'),
+      h('div', { class: 'acts' },
+        h('button', { class: 'act', 'aria-label': 'Search', html: u.ic('search'), onclick: () => openMsgSearch() }),
+        h('button', { class: 'act', 'aria-label': 'Starred messages', html: u.ic('star'), onclick: () => openStarred() }),
+        h('button', { class: 'act', 'aria-label': 'Settings', html: u.ic('bell'), onclick: () => openSettings() })),
+      h('div', { class: 'sec' }, 'Shared photos'), shared,
+      h('div', { class: 'enc' }, h('span', { html: u.ic('lock') }), 'End-to-end encrypted'));
   };
 
   ui.openChat = function (peer) {
@@ -319,6 +334,7 @@
 
     if (stick) { scrollBottom(false); markSeenLocal(); }
     updateFab();
+    ui.renderPerson();
   };
 
   function olderEl() {
@@ -435,7 +451,7 @@
     } else {
       b.append(h('button', { class: 'chev', 'aria-label': 'Message options', html: u.ic('down') }));
       if (m.rp) b.append(quoteEl(m.rp));
-      if (!m.dec) { b.append(h('div', { class: 'text undec' }, 'Could not be decrypted. Check your Galaxy Key.')); hasText = true; }
+      if (!m.dec) { b.append(h('div', { class: 'text undec' }, 'Could not be decrypted with the current code.')); hasText = true; }
       else {
         if (m.type === 'image') b.append(mediaEl(m));
         else if (m.type === 'file') b.append(m.f && m.f.v ? voiceEl(m) : fileEl(m));
@@ -844,54 +860,23 @@
     core.getFileUrl(m).then((url) => { img.src = url; });
   }
 
-  function cropSquare(file, size) {
-    return new Promise((res, rej) => {
-      const im = new Image(); const url = URL.createObjectURL(file);
-      im.onload = () => {
-        const s = Math.min(im.width, im.height);
-        const cv = document.createElement('canvas'); cv.width = cv.height = size;
-        cv.getContext('2d').drawImage(im, (im.width - s) / 2, (im.height - s) / 2, s, s, 0, 0, size, size);
-        URL.revokeObjectURL(url);
-        let q = 0.78, out = cv.toDataURL('image/jpeg', q);
-        while (out.length > 30000 && q > 0.3) { q -= 0.1; out = cv.toDataURL('image/jpeg', q); }
-        res(out);
-      };
-      im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('img')); };
-      im.src = url;
-    });
-  }
-
   function openProfile() {
-    let photo; // undefined = unchanged, '' = removed
-    const big = u.avatar(S.me, 140); big.classList.add('big', 'editable');
-    const fileIn = h('input', { type: 'file', accept: 'image/*', hidden: true });
-    const camBadge = h('span', { class: 'cam-badge', html: u.ic('camera') });
-    const wrap = h('div', { class: 'pf-photo', onclick: () => { MC.stealth.hold(3 * 60 * 1000); fileIn.click(); } }, big, camBadge);
-    const done = () => MC.stealth.release();
-    fileIn.addEventListener('cancel', done);
-    fileIn.addEventListener('change', async () => {
-      done();
-      const f = fileIn.files[0]; if (!f) return;
-      try { photo = await cropSquare(f, 192); u.fillAvatar(big, { photo, name: S.me.name, username: S.me.username }); } catch (e) { u.toast('Could not load that photo'); }
-    });
+    const big = u.avatar(S.me, 104); big.classList.add('big'); big.style.alignSelf = 'center'; big.style.marginBottom = '10px';
     const name = h('input', { value: S.me.name, maxlength: 40, placeholder: 'Your name' });
     const about = h('input', { value: S.me.about || '', maxlength: 120, placeholder: 'About' });
     const save = h('button', { class: 'btn primary' }, h('span', {}, 'Save'), h('i', { class: 'spin' }));
-    const rm = S.me.photo ? h('button', { class: 'link', onclick: () => { photo = ''; u.fillAvatar(big, { name: name.value, username: S.me.username }); } }, 'Remove photo') : null;
     const mod = openModal({
       title: 'Profile', cls: 'profile',
-      body: [h('div', { class: 'pf-body' }, wrap, fileIn, rm,
+      body: [h('div', { class: 'pf-body' }, big,
         h('label', { class: 'fld' }, h('span', {}, 'Your name'), name),
         h('label', { class: 'fld' }, h('span', {}, 'About'), about),
-        h('div', { class: 'muted small' }, '@' + S.me.username + ' · Your name, about and photo are stored encrypted.'),
+        h('div', { class: 'muted small' }, '@' + S.me.username + ' · Your name and about are stored encrypted.'),
         save)],
     });
     save.addEventListener('click', async () => {
       save.classList.add('loading'); save.disabled = true;
       try {
-        const p = { name: name.value.trim() || S.me.username, about: about.value.trim() };
-        if (photo !== undefined) p.photo = photo;
-        await core.saveProfile(p);
+        await core.saveProfile({ name: name.value.trim() || S.me.username, about: about.value.trim() });
         u.toast('Profile saved'); mod.close();
       } catch (e) { u.toast(e.message || 'Could not save'); save.classList.remove('loading'); save.disabled = false; }
     });
@@ -899,7 +884,7 @@
 
   async function openContact() {
     const p = S.users.get(S.current); if (!p) return;
-    const big = u.avatar(p, 160); big.classList.add('big');
+    const big = u.avatar(p, 104); big.classList.add('big');
     const pr = S.peers[p.uid];
     let code = '';
     try {
@@ -911,7 +896,7 @@
       body: [h('div', { class: 'pf-body center' }, big, h('h2', {}, p.name), h('div', { class: 'muted' }, '@' + p.username),
         h('div', { class: 'ci-status' }, pr && pr.online ? 'online' : u.lastSeen(p.lastSeen || (pr && pr.lastSeen))),
         h('div', { class: 'ci-sec' }, h('div', { class: 'muted small' }, 'About'), h('div', {}, p.about || '—')),
-        h('div', { class: 'ci-sec lockbox' }, h('span', { html: u.ic('lock') }), h('div', {}, h('b', {}, 'End-to-end encrypted'), h('div', { class: 'muted small' }, 'Messages and files open only with your Galaxy Key. You should both see the same code: ' + code))))],
+        h('div', { class: 'ci-sec lockbox' }, h('span', { html: u.ic('lock') }), h('div', {}, h('b', {}, 'End-to-end encrypted'), h('div', { class: 'muted small' }, 'Messages and files open only with your unlock code. Safety code, you should both see the same: ' + code))))],
     });
   }
 
@@ -940,7 +925,7 @@
       h('label', { class: 'fld' }, h('span', {}, 'New password'), nw),
       h('label', { class: 'fld' }, h('span', {}, 'Confirm new password'), cf),
       h('label', { class: 'chk' }, show, h('span', {}, 'Show passwords')),
-      h('div', { class: 'muted small' }, 'The Galaxy Key saved on this device is re-encrypted with the new password. Other devices are logged out: they need the new password and the Galaxy Key once.'),
+      h('div', { class: 'muted small' }, 'This changes your login password only. Your unlock code stays the same. Other devices are logged out and need the new password.'),
       save);
     const mod = openModal({ title: 'Change password', cls: 'profile', body: [form] });
     const fail = (m) => { err.textContent = m; err.classList.remove('hidden'); err.style.animation = 'none'; void err.offsetWidth; err.style.animation = ''; };
@@ -963,18 +948,19 @@
     setTimeout(() => cur.focus(), 120);
   }
 
-  /** Settings -> Change secret code. The code itself never leaves this form: only a salted hash is stored. */
+  /** Settings -> Change secret code. The code is the encryption key, so everything is re-encrypted (see core.changeCode). */
   function openChangeCode() {
     const mk = (ph) => h('input', { type: 'password', autocomplete: 'off', placeholder: ph, maxlength: 64, spellcheck: 'false', autocapitalize: 'off', autocorrect: 'off' });
     const cur = mk('Current code'), nw = mk('New code (8 to 64 characters)'), cf = mk('Repeat the new code');
     const err = h('div', { class: 'err hidden' });
+    const steps = h('div', { class: 'steps' });
     const save = h('button', { class: 'btn primary', type: 'submit' }, h('span', {}, 'Change code'), h('i', { class: 'spin' }));
     const form = h('form', { class: 'pf-body', autocomplete: 'off' }, err,
       h('label', { class: 'fld' }, h('span', {}, 'Current code'), cur),
       h('label', { class: 'fld' }, h('span', {}, 'New code'), nw),
       h('label', { class: 'fld' }, h('span', {}, 'Confirm new code'), cf),
-      h('div', { class: 'muted small' }, 'Type this code in the "Name your planet" box to open the private area. Both phones switch to the new code automatically. Only a salted hash is saved, never the code.'),
-      save);
+      h('div', { class: 'muted small' }, 'The code is also the encryption key, so every message, reaction and file is re-encrypted with the new one. Your companion is asked for the new code the next time they open the sky. Tell them the code yourself: it is never sent anywhere.'),
+      steps, save);
     const mod = openModal({ title: 'Change secret code', cls: 'profile', body: [form] });
     const fail = (m) => { err.textContent = m; err.classList.remove('hidden'); err.style.animation = 'none'; void err.offsetWidth; err.style.animation = ''; };
     form.addEventListener('submit', async (ev) => {
@@ -984,19 +970,19 @@
       if (nw.value === cur.value) return fail('The new code must differ from the current one');
       if (nw.value !== cf.value) return fail('The two new codes do not match');
       save.classList.add('loading'); save.disabled = true;
-      try { await MC.stealth.changeCode(cur.value, nw.value); mod.close(); u.toast('Secret code changed'); }
-      catch (e) { fail(e.code === 'network' ? 'Cannot reach the server' : (e.message || 'Could not change the code')); save.classList.remove('loading'); save.disabled = false; }
+      try { await core.changeCode(cur.value, nw.value, (t) => { steps.textContent = t; }); mod.close(); u.toast('Secret code changed'); }
+      catch (e) { fail(e.code === 'network' ? 'Cannot reach the server' : (e.message || 'Could not change the code')); save.classList.remove('loading'); save.disabled = false; steps.textContent = ''; }
     });
     setTimeout(() => cur.focus(), 120);
   }
 
-  function openSkins() {
-    const grid = h('div', { class: 'skin-grid' });
-    const names = { galaxy: 'Galaxy', neon: 'Neon', sunset: 'Sunset', ocean: 'Ocean' };
-    core.SKINS.forEach((v) => grid.append(h('button', { class: 'skin-card' + (core.resolvedTheme() === v ? ' on' : ''), dataset: { skin: v }, type: 'button', onclick: () => {
-      core.setSkin(v); grid.querySelectorAll('.skin-card').forEach((b) => b.classList.toggle('on', b.dataset.skin === v)); u.haptic(8);
-    } }, h('i', { class: 'sw2' }), h('i', { class: 'sw1' }), names[v])));
-    return grid;
+  function themeSeg() {
+    const seg = h('div', { class: 'seg' });
+    [['light', 'Light', 'sun'], ['dark', 'Dark', 'moon'], ['auto', 'Auto', 'orbit']].forEach(([v, l, i]) => seg.append(h('button', {
+      type: 'button', class: S.settings.theme === v ? 'on' : '', html: u.ic(i) + '<span>' + l + '</span>',
+      onclick: (e) => { core.setTheme(v); seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === e.currentTarget)); u.haptic(8); },
+    })));
+    return seg;
   }
 
   function openSettings() {
@@ -1008,7 +994,8 @@
     const btn = (icon, title, sub, fn, danger) => h('button', { class: 'set-btn' + (danger ? ' danger' : ''), onclick: fn },
       h('span', { html: u.ic(icon) }), h('div', {}, h('div', {}, title), sub ? h('div', { class: 'muted small' }, sub) : null));
     const rows = [
-      h('div', { class: 'set-sec' }, 'Themes'), openSkins(),
+      h('div', { class: 'set-sec' }, 'Appearance'), themeSeg(),
+      h('div', { class: 'muted small pad' }, 'Auto is Light from 6 AM to 7 PM and Dark at night.'),
       h('div', { class: 'set-sec' }, 'Sound and effects'),
       sw('Sound effects', 'Pop, whoosh and reaction sounds', () => S.settings.sound, async (on) => { S.settings.sound = on; core.saveSettings(); if (on) { u.unlockAudio(); u.sfx('in'); } }),
       sw('Word effects', 'Confetti, hearts and fireworks for special words', () => S.settings.effects !== false, async (on) => { S.settings.effects = on; core.saveSettings(); if (on && MC.fx) MC.fx.confetti(); }),
@@ -1019,18 +1006,17 @@
         core.saveSettings(); maybeNotifBanner();
       }),
       h('div', { class: 'set-sec' }, 'Stealth Mode'),
-      h('div', { class: 'muted small pad' }, 'This area hides at once when you leave the app, switch tabs or the screen turns off. To hide it yourself, shake the phone or press and hold the top bar (or an empty part of the conversation) for 3 seconds.'),
-      sw('Shake to hide', 'Shake the phone to jump back to the night sky', () => S.settings.shake !== false, async (on) => { S.settings.shake = on; core.saveSettings(); if (on) { const r = await MC.stealth.askMotion(); if (r === 'denied') u.toast('Motion access was declined'); } }),
-      btn('key', 'Change secret code', 'The code you type in the “Name your planet” box', () => openChangeCode()),
+      h('div', { class: 'muted small pad' }, 'This area hides at once when you leave the app, switch tabs or the screen turns off. To hide it yourself, shake the phone or press and hold the header (or an empty part of the conversation) for 3 seconds.'),
+      sw('Shake to hide', 'Shake the phone to jump back to the sky', () => S.settings.shake !== false, async (on) => { S.settings.shake = on; core.saveSettings(); if (on) { const r = await MC.stealth.askMotion(); if (r === 'denied') u.toast('Motion access was declined'); } }),
+      btn('key', 'Change secret code', 'The code you type in the “Name your planet” box. It is also the encryption key.', () => openChangeCode()),
       h('div', { class: 'set-sec' }, 'Security'),
-      h('div', { class: 'muted small pad' }, 'The app locks when it is closed or away for over a minute. Unlock with your username and password. Your Galaxy Key is saved on this device, encrypted with your password.'),
+      h('div', { class: 'muted small pad' }, 'The app locks when it is closed or away for over a minute. Log in again, then type your unlock code in the sky. The code is never stored on this device.'),
       btn('lock', 'Lock now', 'Alerts keep working', () => core.lockNow()),
-      btn('edit', 'Change password', 'The saved Galaxy Key is re-encrypted with the new password', () => openChangePassword()),
-      btn('key', 'Re-enter Galaxy Key', 'Removes the saved key from this device', () => confirmBox({ title: 'Re-enter the Galaxy Key?', text: 'The saved key is removed from this device. After logging in you will enter the same Galaxy Key again.', ok: 'Continue' }).then((y) => { if (y) core.forgetKey(); })),
+      btn('edit', 'Change password', 'Your login password only. The unlock code stays the same.', () => openChangePassword()),
     ];
     if (ui.installEvt) rows.push(btn('download', 'Install Galaxy Relax', 'Add it to your home screen', async () => { ui.installEvt.prompt(); ui.installEvt = null; }));
     else if (/iphone|ipad/i.test(navigator.userAgent) && !window.navigator.standalone) rows.push(h('div', { class: 'muted small pad' }, 'iPhone: in Safari tap Share, then “Add to Home Screen”, to install the app.'));
-    rows.push(btn('logout', 'Log out', null, () => confirmBox({ title: 'Log out?', text: 'This removes the saved Galaxy Key, alerts and all other data from this device. You will enter the Galaxy Key again next time.', ok: 'Log out', danger: true }).then((y) => { if (y) core.logout(); }), true));
+    rows.push(btn('logout', 'Log out', null, () => confirmBox({ title: 'Log out?', text: 'This removes alerts and all other data from this device. You will log in and type your unlock code again next time.', ok: 'Log out', danger: true }).then((y) => { if (y) core.logout(); }), true));
     rows.push(h('div', { class: 'muted small pad' }, 'Galaxy Relax v' + (window.MYCHAT_VERSION || '?')));
     openModal({ title: 'Settings', cls: 'tall', body: [h('div', { class: 'set-list' }, rows)] });
   }
@@ -1039,7 +1025,13 @@
   function bindEvents() {
     bindMessages();
     el.btnMe.addEventListener('click', openProfile);
-    el.btnTheme.addEventListener('click', () => { openModal({ title: 'Themes', body: [h('div', { style: { padding: '8px 0 22px' } }, openSkins())] }); });
+    el.btnTheme.addEventListener('click', quickTheme);
+    el.railTheme.addEventListener('click', quickTheme);
+    el.railSky.addEventListener('click', () => MC.stealth.hide('panic'));
+    el.railStar.addEventListener('click', openStarred);
+    el.railSettings.addEventListener('click', openSettings);
+    el.railMe.addEventListener('click', openProfile);
+    el.railChat.addEventListener('click', () => { if (S.current) el.input.focus(); });
     el.btnStarred.addEventListener('click', openStarred);
     el.btnMenu.addEventListener('click', () => {
       const r = el.btnMenu.getBoundingClientRect();
@@ -1049,7 +1041,7 @@
         { icon: 'settings', label: 'Settings', fn: openSettings },
         { icon: 'moonStar', label: 'Back to the sky', fn: () => MC.stealth.hide('panic') },
         { icon: 'lock', label: 'Lock', fn: () => core.lockNow() },
-        { icon: 'logout', label: 'Log out', danger: true, fn: () => confirmBox({ title: 'Log out?', text: 'This removes the saved Galaxy Key and all other data from this device.', ok: 'Log out', danger: true }).then((y) => { if (y) core.logout(); }) },
+        { icon: 'logout', label: 'Log out', danger: true, fn: () => confirmBox({ title: 'Log out?', text: 'This removes alerts and all other data from this device.', ok: 'Log out', danger: true }).then((y) => { if (y) core.logout(); }) },
       ], { x: r.right, y: r.bottom + 4, right: true });
     });
     el.nbOn.addEventListener('click', async () => { await core.askNotif(); maybeNotifBanner(); });

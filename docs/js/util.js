@@ -92,7 +92,7 @@
       el.append(img); el.style.background = '';
     } else {
       const name = (user && (user.name || user.username)) || '?';
-      el.style.background = opts && opts.teal ? '' : u.colorFor(user ? user.username : name);
+      el.style.background = '';                    // the gradient comes from the stylesheet (theme aware)
       const s = document.createElement('span');
       s.textContent = Array.from(name.trim())[0] ? Array.from(name.trim())[0].toUpperCase() : '?';
       el.append(s);

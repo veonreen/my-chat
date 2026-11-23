@@ -1,5 +1,8 @@
-/* MyChat — End-to-End Encryption (Web Crypto: PBKDF2 -> AES-GCM-256)
- * Secret Key kabhi server ko nahi jaati. Server ko sirf encrypted bytes milte hain.
+/* Galaxy Relax: end-to-end encryption (Web Crypto AES-GCM-256).
+ *
+ * The unlock code IS the shared key: Argon2id(code, appSalt + per-install random salt) -> AES-GCM key.
+ * Neither the code nor any hash of it is ever sent anywhere or written to storage. The server only holds a random
+ * salt and a small encrypted "check" value; a device proves the typed code is right by decrypting that value locally.
  */
 (function () {
   const MC = (window.MC = window.MC || {});
@@ -20,35 +23,69 @@
     return u8;
   };
   const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+  const unhex = (h) => Uint8Array.from(h.match(/../g) || [], (x) => parseInt(x, 16));
 
-  const baseKey = (secret) =>
-    subtle.importKey('raw', enc.encode(String(secret).normalize('NFKC')), 'PBKDF2', false, ['deriveKey', 'deriveBits']);
-
-  /** Secret Key + workspace salt -> AES-GCM key (non-extractable). */
-  async function deriveKey(secret, saltB64) {
-    const base = await baseKey(secret);
-    return subtle.deriveKey(
-      { name: 'PBKDF2', salt: b64d(saltB64), iterations: 250000, hash: 'SHA-256' },
-      base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-  }
-
-  /** Alag derivation: server ko sirf iska hash milta hai (2nd user ko sahi key wale ko hi allow karne ke liye). */
-  async function proof(secret) {
-    const base = await baseKey(secret);
-    const bits = await subtle.deriveBits(
-      { name: 'PBKDF2', salt: enc.encode('mychat-proof-v1'), iterations: 150000, hash: 'SHA-256' }, base, 256);
-    return hex(bits);
-  }
-
-  /** Password ko browser me stretch karo (PBKDF2). Server ko asli password kabhi nahi milta. */
+  /** Login password is stretched in the browser (PBKDF2), so the server never sees the real password. */
   async function pwHash(username, password) {
-    const base = await baseKey(password);
+    const base = await subtle.importKey('raw', enc.encode(String(password).normalize('NFKC')), 'PBKDF2', false, ['deriveBits']);
     const bits = await subtle.deriveBits(
       { name: 'PBKDF2', salt: enc.encode('mychat-pw-v1:' + String(username).toLowerCase()), iterations: 120000, hash: 'SHA-256' }, base, 256);
     return hex(bits);
   }
 
-  const randSalt = () => b64e(crypto.getRandomValues(new Uint8Array(16)));
+  // ---------- unlock code -> key (Argon2id) ----------
+  const ARGON = { m: 65536, t: 3, p: 1 };                // 64 MiB, 3 passes, 1 lane
+  const APP_SALT = enc.encode('galaxyrelax-v4:');        // fixed app salt; the per-install salt (ksalt) is appended
+  let worker = null, wid = 0;
+  const pending = new Map();
+  function getWorker() {
+    if (worker) return worker;
+    worker = new Worker('js/kdf-worker.js');
+    worker.onmessage = (e) => {
+      const p = pending.get(e.data.id); if (!p) return;
+      pending.delete(e.data.id);
+      if (e.data.error) p.reject(new Error(e.data.error)); else p.resolve(new Uint8Array(e.data.out));
+    };
+    worker.onerror = () => { pending.forEach((p) => p.reject(new Error('kdf'))); pending.clear(); worker = null; };
+    return worker;
+  }
+  function loadMain() {
+    if (window.hashwasm) return Promise.resolve();
+    return new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'js/vendor/argon2.js'; s.onload = res; s.onerror = rej; document.head.append(s); });
+  }
+  const saltFor = (ksaltHex) => { const k = unhex(ksaltHex), s = new Uint8Array(APP_SALT.length + k.length); s.set(APP_SALT, 0); s.set(k, APP_SALT.length); return s; };
+
+  /** -> Uint8Array(32). Runs in a worker; falls back to the main thread if workers are unavailable. */
+  async function kdfBytes(code, ksaltHex) {
+    const salt = saltFor(ksaltHex), pw = String(code).normalize('NFKC');
+    try {
+      const w = getWorker(), id = ++wid;
+      return await new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); w.postMessage({ id, code: pw, salt, m: ARGON.m, t: ARGON.t, p: ARGON.p }); });
+    } catch (e) {
+      await loadMain();
+      return window.hashwasm.argon2id({ password: pw, salt, parallelism: ARGON.p, iterations: ARGON.t, memorySize: ARGON.m, hashLength: 32, outputType: 'binary' });
+    }
+  }
+  /** unlock code + per-install salt -> AES-GCM key (non-extractable). */
+  async function deriveKey(code, ksaltHex) {
+    const bytes = await kdfBytes(code, ksaltHex);
+    const key = await subtle.importKey('raw', bytes, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    bytes.fill(0);
+    return key;
+  }
+  const randKsalt = () => hex(crypto.getRandomValues(new Uint8Array(16)));
+
+  /** In-memory only: lets a re-unlock within the same page session be instant (no Argon2 again). Never persisted. */
+  async function makeVerifier(code) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const h = await subtle.digest('SHA-256', new Uint8Array([...salt, ...enc.encode(String(code).normalize('NFKC'))]));
+    return { salt, h: hex(h) };
+  }
+  async function checkVerifier(v, code) {
+    if (!v) return false;
+    const h = await subtle.digest('SHA-256', new Uint8Array([...v.salt, ...enc.encode(String(code).normalize('NFKC'))]));
+    return hex(h) === v.h;
+  }
 
   async function encBytes(key, u8, aad) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -67,56 +104,14 @@
   const encStr = async (key, str, aad) => b64e(await encBytes(key, enc.encode(str), aad));
   const decStr = async (key, b64, aad) => dec.decode(await decBytes(key, b64d(b64), aad));
 
-  const KC_TEXT = 'mychat-ok';
+  /** The small encrypted "check" value the server keeps: decrypting it proves the typed code is right. */
+  const KC_TEXT = 'galaxy-relax-ok';
   const makeKc = (key) => encStr(key, KC_TEXT, 'kc');
   async function verifyKc(key, kc) {
     try { return (await decStr(key, kc, 'kc')) === KC_TEXT; } catch (e) { return false; }
   }
 
-  // ---- Secret Key "vault": Secret Key ko LOGIN PASSWORD se encrypt karke is device par rakhna ----
-  // PBKDF2(password, random salt) -> AES-GCM key -> encrypt(Secret Key). Password ke bina vault khulta nahi.
-  // Server ko vault ya password ka koi hissa nahi milta (server ka password-hash alag salt/purpose se bana hai).
-  const VAULT = 'mychat.vault';
-  const vaultAad = (username) => 'mychat-vault-v1:' + String(username).toLowerCase();
-  const vaultKey = async (password, salt, iter) =>
-    subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iter, hash: 'SHA-256' }, await baseKey(password), { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-
-  async function vaultSave(username, password, secret) {
-    try {
-      const salt = crypto.getRandomValues(new Uint8Array(16)), iter = 250000;
-      const ct = await encBytes(await vaultKey(password, salt, iter), enc.encode(String(secret)), vaultAad(username));
-      localStorage.setItem(VAULT, JSON.stringify({ v: 1, u: String(username).toLowerCase(), s: b64e(salt), i: iter, d: b64e(ct) }));
-      return true;
-    } catch (e) { return false; }
-  }
-  /** Sahi password + sahi username ho to Secret Key (string) wapas, warna null. */
-  async function vaultOpen(username, password) {
-    try {
-      const v = JSON.parse(localStorage.getItem(VAULT) || 'null');
-      if (!v || v.v !== 1 || v.u !== String(username).toLowerCase()) return null;
-      const iter = Math.min(1000000, Math.max(100000, Number(v.i) || 250000));
-      return dec.decode(await decBytes(await vaultKey(password, b64d(v.s), iter), b64d(v.d), vaultAad(username)));
-    } catch (e) { return null; }
-  }
-  /** Vault kis username ka hai ('' agar vault nahi). */
-  const vaultUser = () => { try { const v = JSON.parse(localStorage.getItem(VAULT) || 'null'); return v && v.v === 1 ? v.u : ''; } catch (e) { return ''; } };
-  /**
-   * Password badalte waqt: purane password se vault kholo, naye password se (naye salt ke saath) dobara encrypt karo.
-   * Naya vault STRING lautata hai (abhi store nahi karta: server ne password badal diya tab vaultStore karo).
-   * Vault nahi ho ya khul na sake to null.
-   */
-  async function vaultRewrap(username, oldPassword, newPassword) {
-    const secret = await vaultOpen(username, oldPassword);
-    if (secret == null) return null;
-    const salt = crypto.getRandomValues(new Uint8Array(16)), iter = 250000;
-    const ct = await encBytes(await vaultKey(newPassword, salt, iter), enc.encode(secret), vaultAad(username));
-    return JSON.stringify({ v: 1, u: String(username).toLowerCase(), s: b64e(salt), i: iter, d: b64e(ct) });
-  }
-  const vaultStore = (json) => { try { localStorage.setItem(VAULT, json); return true; } catch (e) { return false; } };
-  const vaultClear = () => { try { localStorage.removeItem(VAULT); } catch (e) { /* ignore */ } };
-  const hasVault = () => { try { return !!localStorage.getItem(VAULT); } catch (e) { return false; } };
-
-  /** Logout par: is app ka sara local data hatao (sirf 'mychat.*' keys: github.io origin dusre projects ke saath shared hota hai). */
+  /** Logout: remove everything this app stored on the device (only 'mychat.*' keys: github.io is shared with other projects). */
   async function wipeLocal() {
     for (const st of [localStorage, sessionStorage]) {
       try { Object.keys(st).filter((k) => k.indexOf('mychat.') === 0).forEach((k) => st.removeItem(k)); } catch (e) { /* ignore */ }
@@ -130,11 +125,16 @@
     } catch (e) { /* ignore */ }
     try { if (navigator.clearAppBadge) navigator.clearAppBadge(); } catch (e) { /* ignore */ }
   }
-  /** Purane version (v2.0) ne session token localStorage me aur key IndexedDB me bina password ke rakhi thi: hatao. */
+  /** First run of v4 on a device: throw away everything the older versions stored (saved Secret Key vault, settings...). */
   function purgeLegacy() {
-    try { localStorage.removeItem('mychat.session'); localStorage.removeItem('mychat.remember'); localStorage.removeItem('mychat.flash'); } catch (e) { /* ignore */ }
+    try {
+      if (localStorage.getItem('mychat.v4') !== '1') {
+        Object.keys(localStorage).filter((k) => k.indexOf('mychat.') === 0).forEach((k) => localStorage.removeItem(k));
+        localStorage.setItem('mychat.v4', '1');
+      }
+    } catch (e) { /* ignore */ }
     try { indexedDB.deleteDatabase('mychat'); } catch (e) { /* ignore */ }
   }
 
-  MC.cr = { b64e, b64d, deriveKey, proof, pwHash, randSalt, encBytes, decBytes, encStr, decStr, makeKc, verifyKc, vaultSave, vaultOpen, vaultRewrap, vaultStore, vaultUser, vaultClear, hasVault, wipeLocal, purgeLegacy };
+  MC.cr = { b64e, b64d, pwHash, deriveKey, randKsalt, makeVerifier, checkVerifier, encBytes, decBytes, encStr, decStr, makeKc, verifyKc, wipeLocal, purgeLegacy };
 })();

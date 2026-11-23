@@ -73,18 +73,6 @@ const waitEv = (s, ev, pred = () => true, ms = 3000) => new Promise((res) => {
   await rpc(sa, 'del', { id: 'mreact000001' });
   t('cannot react to a deleted message', (await rpc(sb, 'react', { id: 'mreact000001', enc: 'e' })).error === 'forbidden');
 
-  console.log('\n[secret code record]');
-  const rec = { s: 'a'.repeat(32), h: 'b'.repeat(64), i: 100000, n: 18 };
-  const evB2 = waitEv(sb, 'sc', (d) => d && d.h === rec.h);
-  const sc1 = await rpc(sa, 'scset', { rec });
-  t('alice sets the code record', sc1.ok && sc1.rec.h === rec.h && sc1.rec.ts > 0, sc1);
-  t('bob gets it live', !!(await evB2));
-  t('sync returns it (so a fresh phone picks it up)', (await rpc(sb, 'sync')).sc.h === rec.h);
-  t('bad salt refused', (await rpc(sa, 'scset', { rec: { ...rec, s: 'zz' } })).error === 'bad_code');
-  t('too few rounds refused', (await rpc(sa, 'scset', { rec: { ...rec, i: 10 } })).error === 'bad_code');
-  t('absurd length refused', (await rpc(sa, 'scset', { rec: { ...rec, n: 2 } })).error === 'bad_code');
-  t('unauthenticated scset refused', (await http({ action: 'scset', rec, token: 'x'.repeat(40) })).error === 'auth');
-
   console.log('\n[push payload]');
   // (push delivery itself is covered by test/push.js; here we only make sure the server code carries no sender/text)
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');

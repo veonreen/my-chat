@@ -11,33 +11,39 @@
   });
 
   const S = (MC.S = {
-    uid: '', me: null, users: new Map(), key: null, ksalt: '', kc: '',
+    uid: '', me: null, users: new Map(), rawUsers: [], key: null, verifier: null, ksalt: '', kc: '', kver: 0, pendingName: null,
     msgs: new Map(),          // peerUid -> [message] (sorted by ts)
     byId: new Map(),          // msgId -> message
     current: null,            // open chat peer uid
     since: 0, pv: '', peers: {}, more: {}, running: false, vapid: '', pushOn: false,
-    settings: Object.assign({ skin: 'galaxy', sound: true, notif: true, effects: true, shake: true }, LS.get('mychat.settings', {})),
+    settings: Object.assign({ theme: 'light', sound: true, notif: true, effects: true, shake: true }, LS.get('mychat.settings', {})),
     replyTo: null, editing: null, drafts: {}, searchQ: '', typingAt: 0,
   });
 
   const EDIT_WINDOW = 15 * 60 * 1000;
   const MAX_FILE = 6 * 1024 * 1024;
 
-  // ================= Skins / settings =================
-  const SKINS = ['galaxy', 'neon', 'sunset', 'ocean'];
-  const SKIN_BAR = { galaxy: '#0B0E1A', neon: '#07040F', sunset: '#1B0B26', ocean: '#04121F' };
-  const resolvedTheme = () => (SKINS.includes(S.settings.skin) ? S.settings.skin : 'galaxy');
+  // ================= Theme: Light (default), Dark, Auto =================
+  // Auto = Light from 6 AM to 7 PM, Dark at night.
+  const THEMES = ['light', 'dark', 'auto'];
+  const THEME_BAR = { light: '#FAF7F2', dark: '#0A0A0C' };
+  const resolvedTheme = () => {
+    const t = THEMES.includes(S.settings.theme) ? S.settings.theme : 'light';
+    if (t !== 'auto') return t;
+    const h = new Date().getHours();
+    return h >= 6 && h < 19 ? 'light' : 'dark';
+  };
   function applyTheme() {
-    const r = resolvedTheme();
-    document.documentElement.dataset.skin = r;
+    const r = resolvedTheme(), changed = document.documentElement.dataset.theme !== r;
+    document.documentElement.dataset.theme = r;
     const meta = document.querySelector('meta[name=theme-color]');
-    if (meta) meta.content = SKIN_BAR[r];
+    if (meta) meta.content = THEME_BAR[r];
+    if (changed) { if (MC.ui && MC.ui.themeChanged) MC.ui.themeChanged(); if (MC.stealth && MC.stealth.themeChanged) MC.stealth.themeChanged(); }
   }
   const saveSettings = () => LS.set('mychat.settings', S.settings);
-  function setSkin(t) {
-    S.settings.skin = SKINS.includes(t) ? t : 'galaxy'; saveSettings(); applyTheme();
-    if (MC.ui && MC.ui.themeChanged) MC.ui.themeChanged();
-  }
+  function setTheme(t) { S.settings.theme = THEMES.includes(t) ? t : 'light'; saveSettings(); applyTheme(); }
+  setInterval(() => { if (S.settings.theme === 'auto') applyTheme(); }, 60000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.settings.theme === 'auto') applyTheme(); });
 
   // ================= Helpers =================
   const peerOf = (m) => (m.from === S.uid ? m.to : m.from);
@@ -78,8 +84,9 @@
   }
 
   // ================= Decrypt =================
+  // Before the unlock code is typed there is no key: messages are kept raw (m._locked) and decrypted right after unlock.
   async function decField(s, aad) {
-    if (!s) return '';
+    if (!s || !S.key) return '';
     try { return await C.decStr(S.key, s, aad); } catch (e) { return ''; }
   }
   async function decUser(raw) {
@@ -87,26 +94,30 @@
       uid: raw.uid, username: raw.username,
       name: (await decField(raw.nameEnc, raw.uid + ':name')) || raw.username,
       about: (await decField(raw.aboutEnc, raw.uid + ':about')) || '',
-      photo: await decField(raw.photoEnc, raw.uid + ':photo'),
+      photo: '',                                  // avatars are clean initials now; no photos
       lastSeen: raw.lastSeen, profUpd: raw.profUpd,
     };
   }
   async function setUsers(list) {
+    S.rawUsers = list;
     const out = new Map();
     for (const raw of list) { const x = await decUser(raw); out.set(x.uid, x); }
     S.users = out;
     if (out.has(S.uid)) S.me = out.get(S.uid);
   }
   async function decodePayload(m) {
-    if (m.deleted || !m._pl) { m.t = ''; m.rp = null; m.f = null; m.dec = true; return; }
+    if (m.deleted || !m._pl) { m.t = ''; m.rp = null; m.f = null; m.dec = true; m._locked = false; return; }
+    if (!S.key) { m.t = ''; m.rp = null; m.f = null; m.dec = false; m._locked = true; return; }
     try {
       const o = JSON.parse(await C.decStr(S.key, m._pl, m.id));
       m.t = o.t || ''; m.rp = o.rp || null; m.f = o.f || null; m.dec = true;
     } catch (e) { m.t = ''; m.rp = null; m.f = null; m.dec = false; }
+    m._locked = false;
   }
   /** reactions arrive as {uid: encryptedEmoji}; each is bound to (message id, reactor) so it cannot be moved */
   async function decReacts(m, enc) {
     const out = {};
+    if (!S.key) return out;
     for (const uid of Object.keys(enc || {})) {
       try { const e = await C.decStr(S.key, enc[uid], m.id + ':rx:' + uid); if (e) out[uid] = e; } catch (err) { /* ignore a bad one */ }
     }
@@ -118,9 +129,10 @@
       let m = S.byId.get(sm.id);
       const isNew = !m;
       if (!m) { m = {}; S.byId.set(sm.id, m); }
-      const same = m._pl === sm.payload && m.dec !== undefined;
+      const same = m._pl === sm.payload && m.dec !== undefined && !m._locked === !!S.key;
       const before = m.rx || {};
       Object.assign(m, sm, { pending: false, failed: false, uploading: false });
+      m._rawReacts = sm.reacts;
       m.rx = await decReacts(m, sm.reacts);
       if (live && !isNew) for (const uid of Object.keys(m.rx)) if (uid !== S.uid && m.rx[uid] !== before[uid]) reacted.push({ m, emoji: m.rx[uid] });
       if (!same) { m._pl = sm.payload; await decodePayload(m); }
@@ -136,77 +148,70 @@
     added.reacted = reacted;
     return added;
   }
+  /** The code was just typed: decrypt everything that was waiting. */
+  async function decryptAll() {
+    for (const m of S.byId.values()) if (m._locked) { await decodePayload(m); m.rx = await decReacts(m, m._rawReacts); }
+    await setUsers(S.rawUsers);
+  }
 
-  // ================= Auth + App Lock =================
-  // - Session token SIRF memory me (api.token). localStorage/IndexedDB me nahi => tab band = login dobara.
-  // - Secret Key login-password se encrypted "vault" me (crypto.js). Login par password se khulta hai.
-  // - Lock  = memory saaf (page reload), vault bacha rehta hai, push subscription bachi rehti hai.
-  // - Logout = vault + sab local data + push subscription sab hata do.
+  // ================= Login + unlock =================
+  // - The login session token lives only in memory (api.token): closing the app = log in again.
+  // - There is NO stored key at all. The unlock code typed in the night sky is stretched with Argon2id into the AES key,
+  //   and that key lives only in memory (S.key). Lock, reload and logout forget it.
   const LOCK_AFTER_MS = 60 * 1000;
-  let pendingPw = null;      // Secret Key screen par vault banane ke liye password (kaam ke baad turant hata dete hain)
 
-  async function afterAuth(r, o) {
+  function afterAuth(r) {
     api.token = r.token;
-    S.uid = r.uid; S.ksalt = r.ksalt; S.kc = r.kc;
-    S.me = await decUserSafe(r.me);
-    const username = r.me.username;
-    let key = o.key || null;
-    if (!key) {
-      const secret = await C.vaultOpen(username, o.password);          // password se vault kholo
-      if (secret) {
-        const k = await C.deriveKey(secret, r.ksalt);
-        if (await C.verifyKc(k, r.kc)) key = k; else C.vaultClear();   // purani/galat vault
-      }
-    } else if (o.secret) {
-      await C.vaultSave(username, o.password, o.secret);               // signup: turant vault bana do
-    }
-    if (!key) { pendingPw = o.password; return 'need_key'; }
-    S.key = key;
+    S.uid = r.uid; S.ksalt = r.ksalt || ''; S.kc = r.kc || ''; S.kver = r.kver || 0;
+    S.me = { uid: r.uid, username: r.me.username, name: r.me.username, about: '', photo: '' };
+    S.key = null; S.verifier = null;
     return 'ok';
   }
-  async function decUserSafe(raw) { return { uid: raw.uid, username: raw.username, name: raw.username, about: '', photo: '' }; }
-
   async function login(username, password) {
     const r = await api.call('login', { username, password: await C.pwHash(username, password), ua: navigator.userAgent.slice(0, 100) });
-    return afterAuth(r, { password });
+    return afterAuth(r);
   }
-
-  async function signup({ username, password, name, secret }) {
-    if (secret.length < 6) throw new api.ApiError('weak_key', 'Your Galaxy Key needs at least 6 characters');
+  async function signup({ username, password, name }) {
     const cfg = await api.call('config');
     if (cfg.full) throw new api.ApiError('full', 'This galaxy already has two explorers');
-    const proof = await C.proof(secret);
-    let key = null, ksalt, kc;
-    if (!cfg.hasWorkspace) {          // pehla user => workspace + key-check banao
-      ksalt = C.randSalt();
-      key = await C.deriveKey(secret, ksalt);
-      kc = await C.makeKc(key);
-    }
-    const r = await api.call('signup', { username, password: await C.pwHash(username, password), proof, ksalt, kc, ua: navigator.userAgent.slice(0, 100) });
-    if (!key) {
-      key = await C.deriveKey(secret, r.ksalt);
-      if (!(await C.verifyKc(key, r.kc))) throw new api.ApiError('wrong_key', 'The Galaxy Key is wrong');
-    }
-    const st = await afterAuth(r, { key, secret, password });
-    if (name) { try { await saveProfile({ name }); } catch (e) { /* baad me profile se set kar sakte */ } }
-    return st;
+    const r = await api.call('signup', { username, password: await C.pwHash(username, password), ua: navigator.userAgent.slice(0, 100) });
+    S.pendingName = name || null;                 // saved (encrypted) right after the first unlock
+    return afterAuth(r);
   }
+  const codeLen = () => Number(LS.get('mychat.cl', 0)) || 0;     // just the LENGTH of the code, to know when to try (stays on this device)
 
-  /** Vault nahi mila => Secret Key haath se daali. remember=true => password se encrypt karke vault me rakho. */
-  async function unlock(secret, remember) {
-    const key = await C.deriveKey(secret, S.ksalt);
-    if (!(await C.verifyKc(key, S.kc))) throw new api.ApiError('wrong_key', 'The Galaxy Key is wrong');
-    S.key = key;
-    if (remember && pendingPw) await C.vaultSave(S.me.username, pendingPw, secret); else if (!remember) C.vaultClear();
-    pendingPw = null;
+  async function keyReady(key, code) {
+    S.key = key; S.verifier = await C.makeVerifier(code);
+    LS.set('mychat.cl', String(code).length);
+    await decryptAll();
+    if (S.pendingName) { const n = S.pendingName; S.pendingName = null; try { await saveProfile({ name: n }); } catch (e) { /* can be set later in Profile */ } }
   }
+  /** Very first unlock on a brand-new install: the code typed becomes the shared code (the server keeps only a salt + check value). */
+  async function firstKey(code) {
+    const ksalt = C.randKsalt(), key = await C.deriveKey(code, ksalt), kc = await C.makeKc(key);
+    try { const r = await api.call('keyinit', { ksalt, kc }); S.ksalt = r.ksalt; S.kc = r.kc; S.kver = r.kver; }
+    catch (e) {
+      if (e.code !== 'key_exists') throw e;
+      await fullSync();                           // the other phone was first: take its salt and check value, then verify normally
+      return tryUnlock(code);
+    }
+    await keyReady(key, code);
+    return 'ok';
+  }
+  /** The code typed in the sky box. -> 'ok' | 'wrong'. Argon2id runs in a worker (about half a second on a phone). */
+  async function tryUnlock(code) {
+    code = String(code);
+    if (S.key && S.verifier) return (await C.checkVerifier(S.verifier, code)) ? 'ok' : 'wrong';   // already unlocked in this page session: instant
+    if (!S.ksalt || !S.kc) return firstKey(code);
+    const key = await C.deriveKey(code, S.ksalt);
+    if (!(await C.verifyKc(key, S.kc))) return 'wrong';
+    await keyReady(key, code);
+    return 'ok';
+  }
+  const verifyCode = async (code) => (S.key && S.verifier ? C.checkVerifier(S.verifier, code) : (await tryUnlock(code)) === 'ok');
 
-  /** Sirf "Retry" (net error) ke liye: memory me login ho chuka ho to wahi se aage badho. Disk se kabhi restore nahi. */
-  async function restore() {
-    if (api.token && S.uid && S.key) return 'ok';
-    if (api.token && S.uid) return 'need_key';
-    return 'none';
-  }
+  /** Only for the "Retry" button after a network error: if we are already logged in (in memory), carry on. */
+  async function restore() { return api.token && S.uid ? 'ok' : 'none'; }
 
   const flash = (msg) => { try { if (msg) sessionStorage.setItem('mychat.flash', msg); } catch (e) { /* ignore */ } };
   let locking = false;
@@ -215,41 +220,84 @@
     if (locking) return; locking = true;
     S.running = false;
     if (api.token && !(opts && opts.skipServer)) api.beacon('logout', { keepPush: true });
-    api.disconnect(); api.token = null; pendingPw = null;
+    api.disconnect(); api.token = null; S.key = null; S.verifier = null;
     flash(msg || 'Locked. Log in to continue.');
     location.reload();
   }
   const lockNow = () => lock('Locked. Log in to continue.');
   const forceLogout = (msg) => lock(msg || 'Your session has ended. Please log in again.', { skipServer: true });
 
-  /** Poora logout: push band, server session delete, vault/key/settings sab local data saaf. */
+  /** Full logout: push off, server session deleted, key + all local data wiped. */
   async function logout() {
     S.running = false;
     try { await dropPush(); } catch (e) { /* ignore */ }
     try { await api.call('logout', {}, { timeout: 6000 }); } catch (e) { /* ignore */ }
-    api.disconnect(); api.token = null; pendingPw = null;
+    api.disconnect(); api.token = null; S.key = null; S.verifier = null;
     await C.wipeLocal();
     location.reload();
   }
-  /**
-   * Password badlo. Order: (1) vault ko purane password se kholkar naye password se re-encrypt TAIYAR karo (abhi store nahi),
-   * (2) server par password badlo (purana verify hota hai), (3) tabhi naya vault store karo.
-   * Isse agar server mana kare (galat purana password) to vault jaisa tha waisa rehta hai.
-   */
+  /** Change the LOGIN password (the unlock code is separate and unchanged). */
   async function changePassword(oldPw, newPw) {
     const username = S.me.username;
     if (newPw.length < 6) throw new api.ApiError('weak_password', 'The new password needs at least 6 characters');
     if (newPw === oldPw) throw new api.ApiError('same_password', 'The new password must differ from the old one');
-    const [oldH, newH] = [await C.pwHash(username, oldPw), await C.pwHash(username, newPw)];
-    const mine = C.vaultUser() === username;
-    const newVault = mine ? await C.vaultRewrap(username, oldPw, newPw) : null;
-    await api.call('chpw', { oldPassword: oldH, newPassword: newH }, { timeout: 30000 });
-    if (newVault) C.vaultStore(newVault);
-    else if (mine) C.vaultClear();            // vault khul hi nahi paya (kharab) => hata do, agle login par Secret Key poochega
+    await api.call('chpw', { oldPassword: await C.pwHash(username, oldPw), newPassword: await C.pwHash(username, newPw) }, { timeout: 30000 });
   }
 
-  /** Settings: "Secret Key dobara daalo" => vault hatao aur lock karo (agle login par Secret Key poochega). */
-  function forgetKey() { C.vaultClear(); lock('Galaxy Key removed. Log in and enter it again.'); }
+  /**
+   * Change the unlock code = change the key, so EVERYTHING is re-encrypted: messages, reactions, profile fields, files.
+   * Order: read it all (dump) -> decrypt with the old key -> encrypt with the new key -> park re-encrypted files -> one atomic
+   * commit on the server (refused as "stale" if anything changed meanwhile; then we simply start over).
+   * The other phone is told and asks for the new code. Nothing is lost if this fails half way: the server only swaps at the commit.
+   */
+  let rekeying = false;                         // our own commit also reaches us as a 'keyinfo' event (it came over HTTP): ignore that one
+  async function changeCode(oldCode, newCode, onStep) {
+    const step = onStep || (() => {});
+    rekeying = true;
+    try { return await changeCodeInner(oldCode, newCode, step); } finally { setTimeout(() => { rekeying = false; }, 1500); }
+  }
+  async function changeCodeInner(oldCode, newCode, step) {
+    if (!(await verifyCode(oldCode))) throw new api.ApiError('bad_code', 'The current code is not right');
+    if (String(newCode).length < 8 || String(newCode).length > 64) throw new api.ApiError('weak_code', 'Use 8 to 64 characters');
+    for (let attempt = 0; attempt < 4; attempt++) {
+      step('Reading everything…');
+      const d = await api.call('dump', {}, { timeout: 60000 });
+      step('Making the new key…');
+      const ksalt = C.randKsalt(), key2 = await C.deriveKey(newCode, ksalt), kc = await C.makeKc(key2);
+      const re = async (b64, aad) => (b64 ? C.encStr(key2, await C.decStr(S.key, b64, aad), aad) : '');
+      const reSafe = async (b64, aad) => { try { return await re(b64, aad); } catch (e) { return ''; } };
+      step('Re-encrypting messages…');
+      const msgs = [];
+      for (const m of d.msgs) {
+        const reacts = {};
+        for (const uid of Object.keys(m.reacts || {})) { const x = await reSafe(m.reacts[uid], m.id + ':rx:' + uid); if (x) reacts[uid] = x; }
+        let payload;
+        try { payload = await re(m.payload, m.id); } catch (e) { payload = m.payload; }    // already unreadable: keep as is
+        msgs.push({ id: m.id, payload, reacts });
+      }
+      const users = [];
+      for (const u of d.users) users.push({ uid: u.uid, nameEnc: await reSafe(u.nameEnc, u.uid + ':name'), aboutEnc: await reSafe(u.aboutEnc, u.uid + ':about'), photoEnc: '' });
+      let n = 0;
+      for (const fl of d.files) {
+        step(`Re-encrypting files (${++n}/${d.files.length})…`);
+        const r = await api.call('file', { fileId: fl.fileId }, { timeout: 90000 });
+        const bytes = await C.decBytes(S.key, C.b64d(r.data));
+        await api.call('rekeyfile', { fileId: fl.fileId, data: C.b64e(await C.encBytes(key2, bytes)) }, { timeout: 120000 });
+      }
+      step('Saving…');
+      try {
+        const r = await api.call('rekey', { baseVer: d.kver, ksalt, kc, msgs, users, files: d.files.map((x) => x.fileId) }, { timeout: 120000 });
+        S.key = key2; S.verifier = await C.makeVerifier(newCode); S.ksalt = r.ksalt; S.kc = r.kc; S.kver = r.kver;
+        LS.set('mychat.cl', String(newCode).length);
+        step('Refreshing…');
+        await fullSync(); refreshUI();
+        return true;
+      } catch (e) {
+        if (e.code !== 'stale') throw e;           // a message arrived meanwhile: read everything again
+      }
+    }
+    throw new api.ApiError('stale', 'Messages kept arriving while re-encrypting. Please try again.');
+  }
 
   // ---- Auto-lock: background 1 min+ / sleep / app band ----
   let hiddenAt = 0, lockTimer = null, lastTick = Date.now();
@@ -273,7 +321,7 @@
   async function fullSync() {
     const r = await api.call('sync', {}, { timeout: 40000 });
     S.pv = r.pv; S.peers = r.peers || {}; S.vapid = r.vapid || S.vapid;
-    if (MC.stealth) MC.stealth.syncCode(r.sc);
+    S.ksalt = r.ksalt || S.ksalt; S.kc = r.kc || S.kc; S.kver = r.kver || S.kver;
     await setUsers(r.users);
     S.msgs.clear(); S.byId.clear();
     await mergeMsgs(r.msgs);
@@ -334,7 +382,12 @@
       refreshUI(); autoSeen();
       if (MC.ui && MC.ui.ready) added.reacted.forEach((x) => MC.ui.reactFx(x.m, x.emoji));
     });
-    api.on('sc', (rec) => { if (MC.stealth) MC.stealth.syncCode(rec); });
+    // the other phone changed the unlock code: our key is no longer valid, so lock and ask for the new code
+    api.on('keyinfo', (d) => {
+      if (!d || rekeying) return;
+      if (S.key && d.kver !== S.kver) return forceLogout('The secret code was changed. Log in and type the new code.');
+      S.ksalt = d.ksalt; S.kc = d.kc; S.kver = d.kver;
+    });
     api.on('peers', (d) => { if (!S.running) return; S.peers = mergePeers(d); if (MC.ui) { MC.ui.updateStatus(); MC.ui.presenceChanged(); } });
     api.on('typing', (d) => {
       if (!S.running || !d || !d.from) return;
@@ -696,8 +749,8 @@
   window.addEventListener('keydown', u.unlockAudio, { once: true });
 
   MC.core = {
-    applyTheme, setSkin, saveSettings, resolvedTheme, SKINS, sendVis, react, isVisible,
-    login, signup, unlock, restore, logout, forceLogout, lockNow, forgetKey, changePassword, startApp, afterAuth,
+    applyTheme, setTheme, saveSettings, resolvedTheme, THEMES, sendVis, react, isVisible, codeLen, tryUnlock, verifyCode, changeCode, keyReady: () => !!S.key,
+    login, signup, restore, logout, forceLogout, lockNow, changePassword, startApp, afterAuth,
     sendText, sendFiles, recStart, recStop, retry, editMsg, deleteMsg, starMsg, loadOlder, saveProfile,
     getFileUrl, downloadFile, preview, unreadCount, totalUnread, lastMsg, canEdit, nameOf, peerOf, lock,
     clearReply, clearEdit, markTyping, pollNow, askNotif, setupPush, dropPush, refreshUI, isActive, updateTitle, mergeMsgs,

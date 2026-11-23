@@ -1,19 +1,23 @@
-/* MyChat — UI: sidebar, chat view, messages, composer, menus, modals */
+/* Galaxy Relax: private area UI (conversation list, messages, composer, menus, settings).
+ * ui.sleep() removes the whole private area from the page (used when the decoy sky is showing);
+ * ui.start() brings it back. While asleep nothing here renders, so no message exists in the DOM. */
 (function () {
   const MC = window.MC;
   const { u, api } = MC;
   const S = MC.S;
   const core = MC.core;
   const { h, $ } = u;
-  const ui = (MC.ui = { ready: false });
+  const ui = (MC.ui = { ready: false, built: false });
   const el = {};
   const nodes = new Map();      // msgId -> { row, sig }
   const seps = new Map();       // dayKey -> element
   let forceStick = false, loadingOlder = false, sbSig = '';
   let matches = [], matchIdx = -1;
+  let appEl = null, appNext = null, olderNode = null, typingNode = null;
+  const REACTIONS = ['😂', '🔥', '👍', '😮', '😢', '❤️'];
 
   MC.showScreen = function (name) {
-    ['splash', 'auth', 'keyscreen', 'neterr', 'app'].forEach((id) => {
+    ['splash', 'auth', 'keyscreen', 'neterr', 'app', 'decoy'].forEach((id) => {
       const n = document.getElementById(id);
       if (n) n.classList.toggle('hidden', id !== name);
     });
@@ -27,43 +31,99 @@
       'sb-search', 'sb-search-clear', 'sb-search-ic', 'chat-list', 'sb-lock', 'empty-state', 'empty-lock', 'chat', 'btn-back', 'ch-info',
       'ch-avatar', 'ch-name', 'ch-status', 'btn-search', 'btn-chmenu', 'msg-search', 'ms-close', 'ms-ic', 'ms-input', 'ms-count', 'ms-up', 'ms-down',
       'msgs-wrap', 'msgs', 'scroll-down', 'sd-ic', 'sd-count', 'drop-hint', 'reply-bar', 'composer', 'comp-row', 'btn-emoji', 'btn-attach',
-      'input', 'btn-send', 's-mic', 's-send', 'rec-row', 'rec-cancel', 'rec-time', 'rec-send', 'emoji-panel', 'conn-banner'];
+      'input', 'btn-send', 's-mic', 's-send', 'rec-row', 'rec-cancel', 'rec-time', 'rec-send', 'emoji-panel', 'conn-banner', 'skin-bg'];
     ids.forEach((id) => { el[id.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = document.getElementById(id); });
   }
 
   function fillIcons() {
     const set = (node, name) => { if (node) node.innerHTML = u.ic(name); };
-    set(el.btnTheme, 'moon'); set(el.btnStarred, 'star'); set(el.btnMenu, 'more');
+    set(el.btnTheme, 'palette'); set(el.btnStarred, 'star'); set(el.btnMenu, 'more');
     set(el.nbIc, 'bell'); set(el.nbX, 'close'); set(el.sbSearchIc, 'search'); set(el.sbSearchClear, 'close');
     set(el.sbLock, 'lock'); set(el.emptyLock, 'lock'); set(el.btnBack, 'back');
     set(el.btnSearch, 'search'); set(el.btnChmenu, 'more'); set(el.msClose, 'close'); set(el.msIc, 'search');
     set(el.msUp, 'up'); set(el.msDown, 'down'); set(el.sdIc, 'down'); set(el.btnEmoji, 'emoji'); set(el.btnAttach, 'attach');
     set(el.sMic, 'mic'); set(el.sSend, 'send'); set(el.recCancel, 'trash'); set(el.recSend, 'send');
-    ui.themeChanged();
-    const pw = document.getElementById('pw-eye'); if (pw) pw.innerHTML = u.ic('eye');
-    const ki = document.getElementById('key-ic'); if (ki) ki.innerHTML = u.ic('key');
-    const ni = document.getElementById('neterr-ic'); if (ni) ni.innerHTML = u.ic('wifiOff');
   }
 
-  ui.start = function () {
-    MC.showScreen('app');
-    if (!ui.ready) { cacheEls(); fillIcons(); bindEvents(); buildEmojiPanel(); ui.ready = true; setVh(); }
-    ui.profileChanged();
-    ui.renderSidebar();
-    maybeNotifBanner();
-    const peers = [...S.users.keys()].filter((x) => x !== S.uid);
-    if (!isMobile() && peers.length === 1) ui.openChat(peers[0]);
+  // coral hearts drifting up behind the conversation header
+  function buildHearts() {
+    const box = document.querySelector('#chat .hearts'); if (!box) return;
+    const svg = '<svg viewBox="0 0 24 24"><path d="M12 21s-8-5.2-8-11a4.6 4.6 0 0 1 8-3 4.6 4.6 0 0 1 8 3c0 5.8-8 11-8 11z"/></svg>';
+    const xs = [6, 17, 29, 41, 53, 64, 76, 88], rnd = (a, b) => a + Math.random() * (b - a);
+    box.innerHTML = xs.map((x, i) => `<i style="--x:${x + rnd(-3, 3).toFixed(1)}%;--s:${Math.round(rnd(9, 17))}px;--d:${rnd(9, 15).toFixed(1)}s;--dl:${(-rnd(0, 12)).toFixed(1)}s;--dx:${Math.round(rnd(-14, 14))}px;--r:${Math.round(rnd(-25, 25))}deg">${svg}</i>`).join('');
+  }
+
+  // animated backdrop per skin (a handful of nodes, all CSS-animated with transform/opacity)
+  function skinDom(skin) {
+    if (skin === 'neon') return '<i class="o1"></i><i class="o2"></i><i class="gr"></i>';
+    if (skin === 'sunset') return '<i class="su"></i><i class="sw"></i>';
+    if (skin === 'ocean') {
+      let b = '<i class="w1"></i><i class="w2"></i>';
+      for (let i = 0; i < 7; i++) b += `<i class="bb" style="--x:${8 + i * 13}%;--s:${6 + (i * 5) % 9}px;--d:${9 + (i * 3) % 7}s;--dl:${-(i * 2.3).toFixed(1)}s"></i>`;
+      return b;
+    }
+    return '<i class="n1"></i><i class="n2"></i><i class="st"></i><i class="st2"></i>';
+  }
+  ui.themeChanged = function () {
+    if (!el.skinBg) return;
+    const s = core.resolvedTheme();
+    el.skinBg.className = 'skin-bg sk-' + s;
+    el.skinBg.innerHTML = skinDom(s);
   };
 
-  ui.themeChanged = function () {
-    if (!el.btnTheme) return;
-    el.btnTheme.innerHTML = u.ic(core.resolvedTheme() === 'dark' ? 'sun' : 'moon');
+  /** Take the (still empty) private area out of the page before it has ever been shown. */
+  ui.park = function () {
+    if (!appEl) appEl = document.getElementById('app');
+    if (appEl && appEl.isConnected && !ui.ready) { appNext = appEl.nextSibling; appEl.remove(); }
+  };
+
+  ui.start = function () {
+    if (!appEl) appEl = document.getElementById('app');
+    if (appEl && !appEl.isConnected) document.body.insertBefore(appEl, appNext && appNext.isConnected ? appNext : document.getElementById('overlay-root'));
+    if (!ui.built) {
+      cacheEls(); fillIcons(); bindEvents(); buildEmojiPanel(); buildHearts(); setVh();
+      ui.built = true;
+    }
+    MC.showScreen('app');
+    ui.ready = true;
+    ui.themeChanged();
+    ui.profileChanged();
+    sbSig = ''; ui.renderSidebar();
+    maybeNotifBanner();
+    const peers = [...S.users.keys()].filter((x) => x !== S.uid);
+    const target = ui.lastPeer && S.users.has(ui.lastPeer) ? ui.lastPeer : peers.length === 1 ? peers[0] : null;
+    if (target) ui.openChat(target);
+    core.updateTitle();
+  };
+
+  /** Remove the private area from the page. Everything readable is wiped first, then the whole area is detached. */
+  ui.sleep = function () {
+    if (!ui.built || !ui.ready) return;
+    ui.ready = false;
+    if (S.current) S.drafts[S.current] = el.input.value;
+    ui.lastPeer = S.current;
+    if (el.composer.classList.contains('recording')) stopRecording(false);
+    for (const m of S.byId.values()) if (m._audio) { try { m._audio.pause(); } catch (e) { /* ignore */ } m._audio = null; }
+    document.querySelectorAll('.lightbox').forEach((n) => n.remove());
+    ['overlay-root', 'menu-root', 'toast-root'].forEach((id) => { const n = document.getElementById(id); if (n) n.replaceChildren(); });
+    el.msgs.replaceChildren(); nodes.clear(); seps.clear(); olderNode = null; typingNode = null;
+    el.chatList.replaceChildren(); sbSig = '';
+    el.input.value = ''; el.msInput.value = ''; el.sbSearch.value = ''; S.searchQ = ''; matches = []; matchIdx = -1;
+    el.msgSearch.classList.add('hidden'); el.msCount.textContent = '';
+    el.chName.textContent = ''; el.chStatus.textContent = ''; el.chAvatar.replaceChildren(); el.btnMe.replaceChildren();
+    el.replyBar.replaceChildren(); el.replyBar.classList.add('hidden');
+    el.composer.classList.remove('emoji-open', 'has-text', 'recording');
+    el.chat.classList.add('hidden'); el.emptyState.classList.remove('hidden');
+    document.body.classList.remove('chat-open', 'privacy');
+    S.current = null; S.replyTo = null; S.editing = null;
+    appNext = appEl.nextSibling; appEl.remove();
+    core.updateTitle();
   };
 
   ui.setConn = function (ok) {
     if (!el.connBanner) return;
     el.connBanner.classList.toggle('hidden', ok);
-    el.connBanner.innerHTML = u.ic('wifiOff') + ' Connecting… (internet check karo)';
+    el.connBanner.innerHTML = u.ic('wifiOff') + ' Reconnecting…';
   };
 
   function setVh() {
@@ -88,7 +148,7 @@
   function isTyping(peer) { const p = S.peers[peer]; return !!(p && p.typingTo === S.uid); }
 
   ui.renderSidebar = function () {
-    if (!el.chatList) return;
+    if (!ui.ready || !el.chatList) return;
     const q = el.sbSearch.value.trim().toLowerCase();
     el.sbSearchClear.classList.toggle('hidden', !q);
     const peers = peerList();
@@ -105,11 +165,11 @@
       shown++;
       const typing = isTyping(p.uid), unread = core.unreadCount(p.uid);
       const lastEl = h('span', { class: 'cr-last' });
-      if (typing) { lastEl.classList.add('typing'); lastEl.textContent = 'typing...'; }
+      if (typing) { lastEl.classList.add('typing'); lastEl.textContent = 'typing…'; }
       else if (last) {
         if (last.from === S.uid && !last.deleted) lastEl.append(tickEl(last));
         lastEl.append(core.preview(last));
-      } else lastEl.textContent = p.about || 'Say hi 👋';
+      } else lastEl.textContent = p.about || 'Say hello';
       frag.append(h('div', { class: 'chat-row' + (S.current === p.uid ? ' active' : ''), onclick: () => ui.openChat(p.uid) },
         u.avatar(p),
         h('div', { class: 'cr-body' },
@@ -117,7 +177,7 @@
           h('div', { class: 'cr-bot' }, lastEl, unread ? h('span', { class: 'badge' }, unread > 99 ? '99+' : unread) : null))));
     });
 
-    if (q) {                      // messages me search
+    if (q) {                      // search inside messages
       const hits = [];
       for (const m of S.byId.values()) {
         if (m.deleted || !m.dec) continue;
@@ -140,14 +200,14 @@
     }
     if (!shown) {
       frag.append(h('div', { class: 'sb-empty' },
-        q ? 'Kuch nahi mila' : peers.length ? '' : 'Abhi koi dusra user nahi hai.\nDusre user ko app ka link do aur signup karne bolo (same Secret Key ke saath).'));
+        q ? 'Nothing found' : peers.length ? '' : 'Nobody else has joined yet.\nShare the link and ask them to join with the same Galaxy Key.'));
     }
     el.chatList.replaceChildren(frag);
   };
-  ui.presenceChanged = function () { ui.renderSidebar(); };
+  ui.presenceChanged = function () { ui.renderSidebar(); if (ui.ready && S.current) ui.chatChanged(); };
 
   ui.profileChanged = function () {
-    if (!el.btnMe) return;
+    if (!ui.ready || !el.btnMe) return;
     el.btnMe.innerHTML = '';
     el.btnMe.append(u.avatar(S.me));
     if (S.current) fillHeader();
@@ -158,19 +218,19 @@
     el.notifBanner.classList.toggle('hidden', !show);
   }
 
-  // ================= Open / close chat =================
+  // ================= Open / close conversation =================
   function fillHeader() {
     const p = S.users.get(S.current);
     if (!p) return;
-    u.fillAvatar(el.chAvatar, p);
+    u.fillAvatar(el.chAvatar, p, { teal: true });
     el.chName.textContent = p.name;
     ui.updateStatus();
   }
   ui.updateStatus = function () {
-    if (!S.current || !el.chStatus) return;
+    if (!ui.ready || !S.current || !el.chStatus) return;
     const p = S.users.get(S.current), pr = S.peers[S.current];
     let txt = '', cls = '';
-    if (pr && pr.typingTo === S.uid) { txt = 'typing...'; cls = 'typing'; }
+    if (pr && pr.typingTo === S.uid) { txt = 'typing'; cls = 'typing'; }
     else if (pr && pr.online) { txt = 'online'; cls = 'online'; }
     else if (pr && pr.lastSeen > 1000) txt = u.lastSeen(pr.lastSeen);
     else if (p && p.lastSeen > 1000) txt = u.lastSeen(p.lastSeen);
@@ -179,7 +239,7 @@
   };
 
   ui.openChat = function (peer) {
-    if (!S.users.has(peer)) return;
+    if (!ui.ready || !S.users.has(peer)) return;
     if (S.current && S.current !== peer) S.drafts[S.current] = el.input.value;
     const changed = S.current !== peer;
     S.current = peer; S.replyTo = null; S.editing = null;
@@ -200,7 +260,7 @@
     if (!isMobile()) el.input.focus();
   };
   ui.closeChat = function (fromPop) {
-    if (!S.current) return;
+    if (!ui.ready || !S.current) return;
     S.drafts[S.current] = el.input.value;
     S.current = null; S.replyTo = null; S.editing = null;
     document.body.classList.remove('chat-open');
@@ -209,19 +269,19 @@
     if (!fromPop && history.state && history.state.chat) history.back();
     sbSig = ''; ui.renderSidebar();
   };
-  window.addEventListener('popstate', () => { if (S.current && isMobile()) ui.closeChat(true); });
+  window.addEventListener('popstate', () => { if (ui.ready && S.current && isMobile()) ui.closeChat(true); });
 
   // ================= Messages rendering =================
   const isNearBottom = () => { const w = el.msgsWrap; return w.scrollHeight - w.scrollTop - w.clientHeight < 150; };
   const scrollBottom = (smooth) => { const w = el.msgsWrap; w.scrollTo({ top: w.scrollHeight, behavior: smooth ? 'smooth' : 'auto' }); };
 
-  const sigOf = (m) => [m.upd, m.status, m.pending ? 1 : 0, m.failed ? 1 : 0, m.uploading ? 1 : 0, m.starred, m.dec ? 1 : 0, S.searchQ, m._blob ? 1 : 0, m.edited, m.ts, (m.t || '').length].join('|');
+  const sigOf = (m) => [m.upd, m.status, m.pending ? 1 : 0, m.failed ? 1 : 0, m.uploading ? 1 : 0, m.starred, m.dec ? 1 : 0, S.searchQ, m._blob ? 1 : 0, m.edited, m.ts, (m.t || '').length, JSON.stringify(m.rx || {})].join('|');
 
   ui.localAdded = function () { forceStick = true; };
-  ui.msgChanged = function (m) { if (S.current && core.peerOf(m) === S.current) ui.chatChanged(); };
+  ui.msgChanged = function (m) { if (ui.ready && S.current && core.peerOf(m) === S.current) ui.chatChanged(); };
 
   ui.chatChanged = function (forceAll) {
-    if (!S.current || !el.msgs) return;
+    if (!ui.ready || !S.current || !el.msgs) return;
     const arr = S.msgs.get(S.current) || [];
     const stick = forceStick || isNearBottom();
     forceStick = false;
@@ -239,11 +299,19 @@
       }
       let n = nodes.get(m.id);
       const sg = sigOf(m);
-      if (!n) { n = { row: h('div', { class: 'row', dataset: { id: m.id } }), sig: '' }; nodes.set(m.id, n); }
+      if (!n) {
+        n = { row: h('div', { class: 'row', dataset: { id: m.id } }), sig: '' }; nodes.set(m.id, n);
+        if (m._fresh) { const r = n.row; r.classList.add('pop'); r.addEventListener('animationend', () => r.classList.remove('pop'), { once: true }); }
+        m._fresh = false;
+      }
       if (n.sig !== sg || forceAll) { fillRow(n.row, m); n.sig = sg; }
       n.row.classList.toggle('first', newDay || !prev || prev.from !== m.from || prev.deleted !== m.deleted);
       desired.push(n.row);
       prev = m;
+    }
+    if (isTyping(S.current)) {
+      if (!typingNode) typingNode = h('div', { class: 'typing-bubble', 'aria-label': 'typing' }, h('i'), h('i'), h('i'));
+      desired.push(typingNode);
     }
     const c = el.msgs;
     desired.forEach((d, i) => { if (c.children[i] !== d) c.insertBefore(d, c.children[i] || null); });
@@ -253,7 +321,6 @@
     updateFab();
   };
 
-  let olderNode = null;
   function olderEl() {
     if (!olderNode) {
       olderNode = h('div', { class: 'older' }, h('i', { class: 'spin dark' }));
@@ -262,7 +329,7 @@
     return olderNode;
   }
   async function loadOlderUI() {
-    if (loadingOlder || !S.current || !S.more[S.current]) return;
+    if (loadingOlder || !ui.ready || !S.current || !S.more[S.current]) return;
     loadingOlder = true;
     const w = el.msgsWrap, ph = w.scrollHeight, pt = w.scrollTop;
     try { await core.loadOlder(S.current); ui.chatChanged(); w.scrollTop = pt + (w.scrollHeight - ph); }
@@ -288,7 +355,7 @@
   function quoteEl(rp) {
     const mine = rp.u === S.uid;
     return h('div', { class: 'quote', dataset: { rid: rp.id } },
-      h('div', { class: 'q-name', style: { color: mine ? '' : u.colorFor((S.users.get(rp.u) || {}).username) } }, mine ? 'You' : core.nameOf(rp.u)),
+      h('div', { class: 'q-name' }, mine ? 'You' : core.nameOf(rp.u)),
       h('div', { class: 'q-text' }, rp.s || ''));
   }
   const io = new IntersectionObserver((entries) => {
@@ -344,6 +411,15 @@
     upd();
   }
 
+  function rxChip(m) {
+    const groups = new Map();
+    for (const uid of Object.keys(m.rx || {})) groups.set(m.rx[uid], (groups.get(m.rx[uid]) || 0) + 1);
+    if (!groups.size) return null;
+    const chip = h('div', { class: 'rx' + (m.rx[S.uid] ? ' mine' : ''), role: 'button', 'aria-label': 'Reactions' });
+    groups.forEach((n, e) => { chip.append(h('span', {}, e)); if (n > 1) chip.append(h('b', {}, String(n))); });
+    return chip;
+  }
+
   function fillRow(row, m) {
     const mine = m.from === S.uid;
     row.classList.remove('in', 'out'); row.classList.add(mine ? 'out' : 'in');
@@ -354,12 +430,12 @@
 
     if (m.deleted) {
       b.classList.add('del');
-      b.append(h('span', { class: 'del-txt' }, '🚫 ', mine ? 'You deleted this message' : 'This message was deleted'));
+      b.append(h('span', { class: 'del-txt' }, mine ? 'You deleted this message' : 'This message was deleted'));
       hasText = true;
     } else {
       b.append(h('button', { class: 'chev', 'aria-label': 'Message options', html: u.ic('down') }));
       if (m.rp) b.append(quoteEl(m.rp));
-      if (!m.dec) { b.append(h('div', { class: 'text undec' }, '🔒 Message decrypt nahi ho paya. Secret Key check karo.')); hasText = true; }
+      if (!m.dec) { b.append(h('div', { class: 'text undec' }, 'Could not be decrypted. Check your Galaxy Key.')); hasText = true; }
       else {
         if (m.type === 'image') b.append(mediaEl(m));
         else if (m.type === 'file') b.append(m.f && m.f.v ? voiceEl(m) : fileEl(m));
@@ -381,8 +457,10 @@
     if (mine && !m.deleted) meta.append(tickEl(m));
     b.append(meta);
     if (!hasText && !b.classList.contains('media-only')) b.classList.add('tight');
-    if (m.failed) b.append(h('div', { class: 'retry' }, '⚠ Send nahi hua. Tap karke retry karo'));
-    row.replaceChildren(h('div', { class: 'swipe-ic', html: u.ic('reply') }), b);
+    if (m.failed) b.append(h('div', { class: 'retry' }, 'Not sent. Tap to retry'));
+    const chip = m.deleted ? null : rxChip(m);
+    row.classList.toggle('has-rx', !!chip);
+    row.replaceChildren(h('div', { class: 'swipe-ic', html: u.ic('reply') }), h('div', { class: 'bwrap' }, b, chip));
   }
 
   // ----- message interactions (delegated) -----
@@ -395,7 +473,7 @@
     S.replyTo = null; S.editing = m; el.input.value = m.t; autosize(); updateSendState(); ui.renderReplyBar(); el.input.focus();
   }
   ui.renderReplyBar = function () {
-    const bar = el.replyBar; if (!bar) return;
+    const bar = el.replyBar; if (!bar || !ui.ready) return;
     bar.replaceChildren();
     const m = S.editing || S.replyTo;
     if (!m) { bar.classList.add('hidden'); return; }
@@ -412,7 +490,7 @@
   async function copyText(t) {
     try { await navigator.clipboard.writeText(t); }
     catch (e) { const ta = h('textarea', { style: { position: 'fixed', opacity: 0 } }); ta.value = t; document.body.append(ta); ta.select(); try { document.execCommand('copy'); } catch (e2) { /* ignore */ } ta.remove(); }
-    u.toast('Copy ho gaya');
+    u.toast('Copied');
   }
   function discard(m) {
     S.byId.delete(m.id);
@@ -421,21 +499,48 @@
     core.refreshUI();
   }
 
+  // reactions: a heart flies up from the message, the chip pops in
+  async function doReact(m, emoji, x, y) {
+    u.haptic(12);
+    if (S.settings.sound) u.sfx('react');
+    const next = await core.react(m, emoji);
+    if (next && MC.fx) {
+      const n = nodes.get(m.id), r = n && n.row.querySelector('.bubble');
+      const bx = r ? r.getBoundingClientRect() : null;
+      MC.fx.flyEmoji(x != null ? x : bx ? bx.left + bx.width / 2 : innerWidth / 2, y != null ? y : bx ? bx.top : innerHeight / 2, next);
+    }
+  }
+  ui.reactFx = function (m, emoji) {
+    if (!ui.ready || S.current !== core.peerOf(m)) return;
+    const n = nodes.get(m.id), b = n && n.row.querySelector('.bubble');
+    if (!b || !MC.fx) return;
+    const r = b.getBoundingClientRect();
+    MC.fx.flyEmoji(r.left + r.width / 2, r.top, emoji);
+    if (S.settings.sound) u.sfx('react');
+    u.haptic(10);
+  };
+  function reactPicker(m) {
+    const mine = (m.rx || {})[S.uid];
+    return h('div', { class: 'rx-pick' }, REACTIONS.map((e) => h('button', { type: 'button', class: mine === e ? 'on' : '', 'aria-label': 'React ' + e, onclick: (ev) => { closeMenu(); doReact(m, e, ev.clientX, ev.clientY); } }, e)));
+  }
+
   function msgMenu(m, x, y) {
     if (!m || m.deleted) return;
     const mine = m.from === S.uid;
     const items = [];
+    let header = null;
     if (m.failed) {
       items.push({ icon: 'send', label: 'Retry', fn: () => core.retry(m) }, { icon: 'trash', label: 'Discard', danger: true, fn: () => discard(m) });
     } else if (!m.pending) {
+      header = reactPicker(m);
       items.push({ icon: 'reply', label: 'Reply', fn: () => startReply(m) });
       if (m.t) items.push({ icon: 'copy', label: 'Copy', fn: () => copyText(m.t) });
       items.push({ icon: m.starred ? 'starO' : 'star', label: m.starred ? 'Unstar' : 'Star', fn: () => core.starMsg(m, !m.starred) });
       if (core.canEdit(m)) items.push({ icon: 'edit', label: 'Edit', fn: () => startEdit(m) });
       if (m.type !== 'text' && m.fileId) items.push({ icon: 'download', label: 'Download', fn: () => core.downloadFile(m) });
-      if (mine) items.push({ icon: 'trash', label: 'Delete for everyone', danger: true, fn: () => confirmBox({ title: 'Delete message?', text: 'Ye message dono taraf se delete ho jayega.', ok: 'Delete', danger: true }).then((y2) => { if (y2) core.deleteMsg(m); }) });
+      if (mine) items.push({ icon: 'trash', label: 'Delete for everyone', danger: true, fn: () => confirmBox({ title: 'Delete message?', text: 'It will be removed for both of you.', ok: 'Delete', danger: true }).then((y2) => { if (y2) core.deleteMsg(m); }) });
     }
-    showMenu(items, { x, y });
+    showMenu(items, { x, y, header });
   }
 
   function jumpTo(id, tries) {
@@ -449,12 +554,14 @@
     }
     if (S.more[S.current] && tries < 12) {
       core.loadOlder(S.current).then(() => { ui.chatChanged(); jumpTo(id, tries + 1); }).catch(() => {});
-    } else u.toast('Message nahi mila');
+    } else u.toast('Message not found');
   }
 
   function bindMessages() {
     const box = el.msgs;
+    let lastTap = { t: 0, id: '', x: 0, y: 0 };
     box.addEventListener('click', (e) => {
+      if (e.target.closest('.rx')) { const m0 = msgOf(e.target); if (m0) { const r = e.target.closest('.rx').getBoundingClientRect(); msgMenu(m0, r.left, r.top); } return; }
       const m = msgOf(e.target); if (!m) return;
       if (e.target.closest('.chev')) { const r = e.target.closest('.chev').getBoundingClientRect(); return msgMenu(m, r.right, r.bottom); }
       if (e.target.closest('.retry')) return core.retry(m);
@@ -462,20 +569,30 @@
       if (e.target.closest('.media') && m.type === 'image') return lightbox(m);
       if (e.target.closest('.fc-dl') || (e.target.closest('.file-card') && !m.uploading)) return core.downloadFile(m);
       if (e.target.closest('.voice-btn')) return toggleVoice(m);
+      // double tap = heart (only adds; a second double tap on an already hearted message just replays the animation)
+      if (m.deleted || m.pending || m.failed || !e.target.closest('.bubble') || e.target.closest('a')) return;
+      const now = Date.now();
+      if (lastTap.id === m.id && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 44) {
+        lastTap.t = 0;
+        if (m.rx && m.rx[S.uid] === '❤️') { if (MC.fx) MC.fx.flyEmoji(e.clientX, e.clientY, '❤️'); u.haptic(10); }
+        else doReact(m, '❤️', e.clientX, e.clientY);
+      } else lastTap = { t: now, id: m.id, x: e.clientX, y: e.clientY };
     });
     box.addEventListener('contextmenu', (e) => {
       const m = msgOf(e.target); if (!m || e.target.closest('a')) return;
+      if (!e.target.closest('.bubble')) return;
       e.preventDefault(); msgMenu(m, e.clientX, e.clientY);
     });
-    // swipe-to-reply + long press (touch)
+    // swipe-to-reply + long press on a bubble (touch). A long press anywhere else is the 3 second panic hold.
     let t0 = null;
     box.addEventListener('touchstart', (e) => {
       if (e.touches.length !== 1) return;
       const row = e.target.closest('.row'); if (!row) return;
       const m = S.byId.get(row.dataset.id); if (!m || m.deleted || m.pending || m.failed) return;
       const t = e.touches[0];
+      const onBubble = !!e.target.closest('.bubble');
       t0 = { x: t.clientX, y: t.clientY, row, m, dx: 0, lock: false, done: false };
-      t0.timer = setTimeout(() => { if (t0 && !t0.lock) { t0.done = true; if (navigator.vibrate) navigator.vibrate(12); msgMenu(m, t.clientX, t.clientY); } }, 480);
+      if (onBubble) t0.timer = setTimeout(() => { if (t0 && !t0.lock) { t0.done = true; u.haptic(12); msgMenu(m, t.clientX, t.clientY); } }, 480);
     }, { passive: true });
     box.addEventListener('touchmove', (e) => {
       if (!t0 || t0.done) return;
@@ -498,7 +615,7 @@
       const b = t0.row.querySelector('.bubble');
       if (b) { b.style.transition = ''; b.style.transform = ''; }
       t0.row.style.setProperty('--sw', 0);
-      if (t0.lock && t0.dx > 60 && !t0.done) { if (navigator.vibrate) navigator.vibrate(8); startReply(t0.m); }
+      if (t0.lock && t0.dx > 60 && !t0.done) { u.haptic(8); startReply(t0.m); }
       t0 = null;
     };
     box.addEventListener('touchend', end); box.addEventListener('touchcancel', end);
@@ -516,7 +633,7 @@
         const n = nodes.get(m.id); if (n) n.sig = '';
         ui.chatChanged();
         m._audio.play().catch(() => {});
-      }).catch(() => u.toast('Voice message load nahi hua'));
+      }).catch(() => u.toast('Could not load the voice note'));
       return;
     }
     for (const x of S.byId.values()) if (x !== m && x._audio && !x._audio.paused) x._audio.pause();
@@ -534,6 +651,7 @@
   function doSend() {
     const text = el.input.value;
     if (!text.trim()) return;
+    u.haptic(8);
     if (core.sendText(text)) {
       el.input.value = ''; S.drafts[S.current] = '';
       autosize(); updateSendState();
@@ -549,9 +667,10 @@
 
   let recTimer = null;
   async function startRecording() {
+    MC.stealth.hold(5 * 60 * 1000);                   // the mic prompt makes the browser blur the page
     try {
       await core.recStart();
-    } catch (e) { u.toast(e && e.name === 'NotAllowedError' ? 'Mic ki permission do (browser settings)' : (e.message || 'Mic start nahi hua')); return; }
+    } catch (e) { MC.stealth.release(); u.toast(e && e.name === 'NotAllowedError' ? 'Allow the microphone in your browser settings' : (e.message || 'Could not start recording')); return; }
     el.composer.classList.add('recording');
     const t0 = Date.now();
     el.recTime.textContent = '0:00';
@@ -561,6 +680,7 @@
     clearInterval(recTimer);
     el.composer.classList.remove('recording');
     await core.recStop(send);
+    MC.stealth.release();
   }
 
   function buildEmojiPanel() {
@@ -587,12 +707,13 @@
   }
 
   function attachMenu() {
-    const pick = (id) => () => document.getElementById(id).click();
+    // opening a file picker / camera makes the browser blur the page; tell Stealth Mode this is expected
+    const pick = (id) => () => { MC.stealth.hold(3 * 60 * 1000); document.getElementById(id).click(); };
     const items = [
-      { icon: 'doc', label: 'Document', color: '#7f66ff', fn: pick('file-doc') },
-      { icon: 'image', label: 'Photos', color: '#007bfc', fn: pick('file-img') },
+      { icon: 'doc', label: 'Document', color: '#6F7BE8', fn: pick('file-doc') },
+      { icon: 'image', label: 'Photos', color: '#1FB5A3', fn: pick('file-img') },
     ];
-    if (u.isTouch()) items.push({ icon: 'camera', label: 'Camera', color: '#ff2e74', fn: pick('file-cam') });
+    if (u.isTouch()) items.push({ icon: 'camera', label: 'Camera', color: '#FF7A6B', fn: pick('file-cam') });
     const r = el.btnAttach.getBoundingClientRect();
     showMenu(items, { x: r.left, y: r.top, up: true, round: true });
   }
@@ -609,19 +730,19 @@
     } else {
       body.append(h('div', { class: 'ap-doc' }, h('div', { class: 'fc-ic big', html: u.ic('doc') }), h('div', { class: 'ap-name' }, first.name), h('div', { class: 'muted' }, u.fmtSize(first.size))));
     }
-    if (files.length > 1) body.append(h('div', { class: 'ap-more' }, `+ ${files.length - 1} aur file${files.length > 2 ? 's' : ''}`));
+    if (files.length > 1) body.append(h('div', { class: 'ap-more' }, `+ ${files.length - 1} more file${files.length > 2 ? 's' : ''}`));
     const cap = h('input', { class: 'ap-cap', placeholder: 'Add a caption…', maxlength: 500 });
     const send = () => { core.sendFiles(files, cap.value.trim()); mod.close(); forceStick = true; };
     cap.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
     const mod = openModal({
-      title: files.length > 1 ? `${files.length} files bhejni hain` : 'Preview', cls: 'ap',
-      body: [body, h('div', { class: 'ap-foot' }, cap, h('button', { class: 'send-btn on', 'aria-label': 'Send', html: u.ic('send'), onclick: send }))],
+      title: files.length > 1 ? `Send ${files.length} files` : 'Preview', cls: 'ap',
+      body: [body, h('div', { class: 'ap-foot' }, cap, h('button', { class: 'send-btn', 'aria-label': 'Send', html: u.ic('send'), onclick: send }))],
       onClose: () => urls.forEach((x) => URL.revokeObjectURL(x)),
     });
     setTimeout(() => cap.focus(), 80);
   }
 
-  // ================= Search in chat =================
+  // ================= Search in conversation =================
   async function openMsgSearch() {
     el.msgSearch.classList.remove('hidden');
     el.msInput.focus();
@@ -660,9 +781,10 @@
     closeMenu();
     const root = $('#menu-root');
     const menu = h('div', { class: 'menu' + (pos.round ? ' attach' : '') });
+    if (pos.header) menu.append(pos.header);
     items.forEach((it) => {
       menu.append(h('button', { class: 'mi' + (it.danger ? ' danger' : ''), type: 'button', onclick: () => { closeMenu(); it.fn(); } },
-        h('span', { class: 'mi-ic', style: it.color ? { background: it.color, color: '#fff' } : null, html: u.ic(it.icon) }), h('span', {}, it.label)));
+        h('span', { class: 'mi-ic', style: it.color ? { background: it.color, color: '#0B0E1A' } : null, html: u.ic(it.icon) }), h('span', {}, it.label)));
     });
     const back = h('div', { class: 'menu-back', onmousedown: closeMenu, oncontextmenu: (e) => { e.preventDefault(); closeMenu(); }, ontouchstart: closeMenu });
     root.append(back, menu);
@@ -684,7 +806,7 @@
     let closed = false;
     const close = () => {
       if (closed) return; closed = true;
-      ov.classList.remove('show'); setTimeout(() => ov.remove(), 220);
+      ov.classList.remove('show'); setTimeout(() => ov.remove(), 260);
       if (onClose) onClose();
     };
     if (!noHead) sheet.append(h('div', { class: 'sh-head' }, h('button', { class: 'icon-btn', 'aria-label': 'Close', html: u.ic('close'), onclick: close }), h('div', { class: 'sh-title' }, title || '')));
@@ -744,10 +866,13 @@
     const big = u.avatar(S.me, 140); big.classList.add('big', 'editable');
     const fileIn = h('input', { type: 'file', accept: 'image/*', hidden: true });
     const camBadge = h('span', { class: 'cam-badge', html: u.ic('camera') });
-    const wrap = h('div', { class: 'pf-photo', onclick: () => fileIn.click() }, big, camBadge);
+    const wrap = h('div', { class: 'pf-photo', onclick: () => { MC.stealth.hold(3 * 60 * 1000); fileIn.click(); } }, big, camBadge);
+    const done = () => MC.stealth.release();
+    fileIn.addEventListener('cancel', done);
     fileIn.addEventListener('change', async () => {
+      done();
       const f = fileIn.files[0]; if (!f) return;
-      try { photo = await cropSquare(f, 192); u.fillAvatar(big, { photo, name: S.me.name, username: S.me.username }); } catch (e) { u.toast('Photo load nahi hui'); }
+      try { photo = await cropSquare(f, 192); u.fillAvatar(big, { photo, name: S.me.name, username: S.me.username }); } catch (e) { u.toast('Could not load that photo'); }
     });
     const name = h('input', { value: S.me.name, maxlength: 40, placeholder: 'Your name' });
     const about = h('input', { value: S.me.about || '', maxlength: 120, placeholder: 'About' });
@@ -758,7 +883,7 @@
       body: [h('div', { class: 'pf-body' }, wrap, fileIn, rm,
         h('label', { class: 'fld' }, h('span', {}, 'Your name'), name),
         h('label', { class: 'fld' }, h('span', {}, 'About'), about),
-        h('div', { class: 'muted small' }, '@' + S.me.username + ' · Naam, about aur photo encrypted store hote hain.'),
+        h('div', { class: 'muted small' }, '@' + S.me.username + ' · Your name, about and photo are stored encrypted.'),
         save)],
     });
     save.addEventListener('click', async () => {
@@ -767,8 +892,8 @@
         const p = { name: name.value.trim() || S.me.username, about: about.value.trim() };
         if (photo !== undefined) p.photo = photo;
         await core.saveProfile(p);
-        u.toast('Profile save ho gaya'); mod.close();
-      } catch (e) { u.toast(e.message || 'Save nahi hua'); save.classList.remove('loading'); save.disabled = false; }
+        u.toast('Profile saved'); mod.close();
+      } catch (e) { u.toast(e.message || 'Could not save'); save.classList.remove('loading'); save.disabled = false; }
     });
   }
 
@@ -786,14 +911,14 @@
       body: [h('div', { class: 'pf-body center' }, big, h('h2', {}, p.name), h('div', { class: 'muted' }, '@' + p.username),
         h('div', { class: 'ci-status' }, pr && pr.online ? 'online' : u.lastSeen(p.lastSeen || (pr && pr.lastSeen))),
         h('div', { class: 'ci-sec' }, h('div', { class: 'muted small' }, 'About'), h('div', {}, p.about || '—')),
-        h('div', { class: 'ci-sec lockbox' }, h('span', { html: u.ic('lock') }), h('div', {}, h('b', {}, 'End-to-end encrypted'), h('div', { class: 'muted small' }, 'Messages aur files sirf aapke Secret Key se khulte hain. Dono ka code same hona chahiye: ' + code))))],
+        h('div', { class: 'ci-sec lockbox' }, h('span', { html: u.ic('lock') }), h('div', {}, h('b', {}, 'End-to-end encrypted'), h('div', { class: 'muted small' }, 'Messages and files open only with your Galaxy Key. You should both see the same code: ' + code))))],
     });
   }
 
   function openStarred() {
     const list = [...S.byId.values()].filter((m) => m.starred && !m.deleted).sort((a, b) => b.ts - a.ts);
     const body = h('div', { class: 'st-list' });
-    if (!list.length) body.append(h('div', { class: 'sb-empty' }, 'Koi starred message nahi.\nMessage par ⌄ dabake "Star" karo.'));
+    if (!list.length) body.append(h('div', { class: 'sb-empty' }, 'No starred messages yet.\nOpen a message menu and choose Star.'));
     let mod;
     list.forEach((m) => body.append(h('div', { class: 'st-item', onclick: () => { mod.close(); ui.openChat(core.peerOf(m)); setTimeout(() => jumpTo(m.id), 80); } },
       h('div', { class: 'st-top' }, h('b', {}, m.from === S.uid ? 'You' : core.nameOf(m.from)), h('span', {}, u.dayLabel(m.ts))),
@@ -803,72 +928,110 @@
 
   function openChangePassword() {
     const mk = (ac, ph) => h('input', { type: 'password', autocomplete: ac, placeholder: ph, maxlength: 200 });
-    const cur = mk('current-password', 'Current password'), nw = mk('new-password', 'Kam se kam 6 characters'), cf = mk('new-password', 'Naya password dobara');
+    const cur = mk('current-password', 'Current password'), nw = mk('new-password', 'At least 6 characters'), cf = mk('new-password', 'Repeat the new password');
     const err = h('div', { class: 'err hidden' });
     const show = h('input', { type: 'checkbox' });
     show.addEventListener('change', () => [cur, nw, cf].forEach((i) => { i.type = show.checked ? 'text' : 'password'; }));
     const save = h('button', { class: 'btn primary', type: 'submit' }, h('span', {}, 'Change password'), h('i', { class: 'spin' }));
     const form = h('form', { class: 'pf-body', autocomplete: 'on' },
-      h('input', { type: 'text', autocomplete: 'username', value: S.me.username, hidden: true, readonly: true }),   // password manager ke liye
+      h('input', { type: 'text', autocomplete: 'username', value: S.me.username, hidden: true, readonly: true }),   // for password managers
       err,
       h('label', { class: 'fld' }, h('span', {}, 'Current password'), cur),
       h('label', { class: 'fld' }, h('span', {}, 'New password'), nw),
       h('label', { class: 'fld' }, h('span', {}, 'Confirm new password'), cf),
-      h('label', { class: 'chk' }, show, h('span', {}, 'Passwords dikhao')),
-      h('div', { class: 'muted small' }, 'Is device par saved Secret Key naye password se dobara encrypt ho jayegi. Dusre devices par session band ho jayega: wahan naye password se login karna hoga (aur ek baar Secret Key daalni padegi).'),
+      h('label', { class: 'chk' }, show, h('span', {}, 'Show passwords')),
+      h('div', { class: 'muted small' }, 'The Galaxy Key saved on this device is re-encrypted with the new password. Other devices are logged out: they need the new password and the Galaxy Key once.'),
       save);
     const mod = openModal({ title: 'Change password', cls: 'profile', body: [form] });
     const fail = (m) => { err.textContent = m; err.classList.remove('hidden'); err.style.animation = 'none'; void err.offsetWidth; err.style.animation = ''; };
     form.addEventListener('submit', async (ev) => {
       ev.preventDefault();
       err.classList.add('hidden');
-      if (!cur.value) return fail('Current password daalo');
-      if (nw.value.length < 6) return fail('Naya password kam se kam 6 characters ka rakho');
-      if (nw.value === cur.value) return fail('Naya password purane jaisa nahi ho sakta');
-      if (nw.value !== cf.value) return fail('Dono naye password match nahi karte');
+      if (!cur.value) return fail('Enter your current password');
+      if (nw.value.length < 6) return fail('The new password needs at least 6 characters');
+      if (nw.value === cur.value) return fail('The new password must differ from the old one');
+      if (nw.value !== cf.value) return fail('The two new passwords do not match');
       save.classList.add('loading'); save.disabled = true;
       try {
         await core.changePassword(cur.value, nw.value);
-        mod.close(); u.toast('Password badal gaya ✓');
+        mod.close(); u.toast('Password changed');
       } catch (e) {
-        fail(e.code === 'network' ? 'Server se connect nahi ho pa raha' : (e.message || 'Password nahi badla'));
+        fail(e.code === 'network' ? 'Cannot reach the server' : (e.message || 'Could not change the password'));
         save.classList.remove('loading'); save.disabled = false;
       }
     });
     setTimeout(() => cur.focus(), 120);
   }
 
+  /** Settings -> Change secret code. The code itself never leaves this form: only a salted hash is stored. */
+  function openChangeCode() {
+    const mk = (ph) => h('input', { type: 'password', autocomplete: 'off', placeholder: ph, maxlength: 64, spellcheck: 'false', autocapitalize: 'off', autocorrect: 'off' });
+    const cur = mk('Current code'), nw = mk('New code (8 to 64 characters)'), cf = mk('Repeat the new code');
+    const err = h('div', { class: 'err hidden' });
+    const save = h('button', { class: 'btn primary', type: 'submit' }, h('span', {}, 'Change code'), h('i', { class: 'spin' }));
+    const form = h('form', { class: 'pf-body', autocomplete: 'off' }, err,
+      h('label', { class: 'fld' }, h('span', {}, 'Current code'), cur),
+      h('label', { class: 'fld' }, h('span', {}, 'New code'), nw),
+      h('label', { class: 'fld' }, h('span', {}, 'Confirm new code'), cf),
+      h('div', { class: 'muted small' }, 'Type this code in the "Name your planet" box to open the private area. Both phones switch to the new code automatically. Only a salted hash is saved, never the code.'),
+      save);
+    const mod = openModal({ title: 'Change secret code', cls: 'profile', body: [form] });
+    const fail = (m) => { err.textContent = m; err.classList.remove('hidden'); err.style.animation = 'none'; void err.offsetWidth; err.style.animation = ''; };
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); err.classList.add('hidden');
+      if (!cur.value) return fail('Enter the current code');
+      if (nw.value.length < 8) return fail('Use at least 8 characters');
+      if (nw.value === cur.value) return fail('The new code must differ from the current one');
+      if (nw.value !== cf.value) return fail('The two new codes do not match');
+      save.classList.add('loading'); save.disabled = true;
+      try { await MC.stealth.changeCode(cur.value, nw.value); mod.close(); u.toast('Secret code changed'); }
+      catch (e) { fail(e.code === 'network' ? 'Cannot reach the server' : (e.message || 'Could not change the code')); save.classList.remove('loading'); save.disabled = false; }
+    });
+    setTimeout(() => cur.focus(), 120);
+  }
+
+  function openSkins() {
+    const grid = h('div', { class: 'skin-grid' });
+    const names = { galaxy: 'Galaxy', neon: 'Neon', sunset: 'Sunset', ocean: 'Ocean' };
+    core.SKINS.forEach((v) => grid.append(h('button', { class: 'skin-card' + (core.resolvedTheme() === v ? ' on' : ''), dataset: { skin: v }, type: 'button', onclick: () => {
+      core.setSkin(v); grid.querySelectorAll('.skin-card').forEach((b) => b.classList.toggle('on', b.dataset.skin === v)); u.haptic(8);
+    } }, h('i', { class: 'sw2' }), h('i', { class: 'sw1' }), names[v])));
+    return grid;
+  }
+
   function openSettings() {
-    const seg = h('div', { class: 'seg' });
-    [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].forEach(([v, l]) => seg.append(h('button', { class: S.settings.theme === v ? 'on' : '', onclick: (e) => { core.setTheme(v); seg.querySelectorAll('button').forEach((b) => b.classList.remove('on')); e.currentTarget.classList.add('on'); } }, l)));
     const sw = (label, sub, get, set) => {
       const t = h('button', { class: 'switch' + (get() ? ' on' : ''), role: 'switch', 'aria-checked': String(!!get()) }, h('i'));
-      t.addEventListener('click', async () => { const v = await set(!get()); t.classList.toggle('on', !!get()); t.setAttribute('aria-checked', String(!!get())); return v; });
+      t.addEventListener('click', async () => { u.haptic(6); const v = await set(!get()); t.classList.toggle('on', !!get()); t.setAttribute('aria-checked', String(!!get())); return v; });
       return h('div', { class: 'set-row' }, h('div', {}, h('div', {}, label), h('div', { class: 'muted small' }, sub)), t);
     };
+    const btn = (icon, title, sub, fn, danger) => h('button', { class: 'set-btn' + (danger ? ' danger' : ''), onclick: fn },
+      h('span', { html: u.ic(icon) }), h('div', {}, h('div', {}, title), sub ? h('div', { class: 'muted small' }, sub) : null));
     const rows = [
-      h('div', { class: 'set-sec' }, 'Appearance'), h('div', { class: 'set-row col' }, seg),
-      h('div', { class: 'set-sec' }, 'Notifications'),
-      sw('Notifications', 'Naye message par alert (app band ho tab bhi, Web Push)', () => S.settings.notif && 'Notification' in window && Notification.permission === 'granted', async (on) => {
-        if (on) { S.settings.notif = true; const r = await core.askNotif(); S.settings.notif = r === 'granted'; if (r !== 'granted') u.toast('Browser settings me notifications allow karo'); }
+      h('div', { class: 'set-sec' }, 'Themes'), openSkins(),
+      h('div', { class: 'set-sec' }, 'Sound and effects'),
+      sw('Sound effects', 'Pop, whoosh and reaction sounds', () => S.settings.sound, async (on) => { S.settings.sound = on; core.saveSettings(); if (on) { u.unlockAudio(); u.sfx('in'); } }),
+      sw('Word effects', 'Confetti, hearts and fireworks for special words', () => S.settings.effects !== false, async (on) => { S.settings.effects = on; core.saveSettings(); if (on && MC.fx) MC.fx.confetti(); }),
+      h('div', { class: 'set-sec' }, 'Alerts'),
+      sw('Notifications', 'A quiet “new star” alert, even when the app is closed', () => S.settings.notif && 'Notification' in window && Notification.permission === 'granted', async (on) => {
+        if (on) { S.settings.notif = true; const r = await core.askNotif(); S.settings.notif = r === 'granted'; if (r !== 'granted') u.toast('Allow notifications in your browser settings'); }
         else { S.settings.notif = false; core.dropPush(); }
         core.saveSettings(); maybeNotifBanner();
       }),
-      sw('Message sounds', 'Send / receive tone', () => S.settings.sound, async (on) => { S.settings.sound = on; core.saveSettings(); if (on) { u.unlockAudio(); u.beep('in'); } }),
-      h('div', { class: 'set-sec' }, 'App Lock & security'),
-      h('div', { class: 'muted small pad' }, 'App band karke kholne par, ya 1 minute se zyada background me rehne par app lock ho jata hai. Unlock = username + password. Secret Key tumhare password se encrypt hokar is device par rakhi hai.'),
-      h('button', { class: 'set-btn', onclick: () => core.lockNow() },
-        h('span', { html: u.ic('lock') }), h('div', {}, h('div', {}, 'Lock app abhi'), h('div', { class: 'muted small' }, 'Notifications chalte rahenge'))),
-      h('button', { class: 'set-btn', onclick: () => openChangePassword() },
-        h('span', { html: u.ic('edit') }), h('div', {}, h('div', {}, 'Change password'), h('div', { class: 'muted small' }, 'Saved Secret Key naye password se re-encrypt hogi'))),
-      h('button', { class: 'set-btn', onclick: () => confirmBox({ title: 'Secret Key badalni hai?', text: 'Is device se saved key hat jayegi. Login ke baad wahi Secret Key dobara daalni padegi.', ok: 'Continue' }).then((y) => { if (y) core.forgetKey(); }) },
-        h('span', { html: u.ic('key') }), h('div', {}, h('div', {}, 'Secret Key dobara daalo'), h('div', { class: 'muted small' }, 'Is device se saved key hatao'))),
+      h('div', { class: 'set-sec' }, 'Stealth Mode'),
+      h('div', { class: 'muted small pad' }, 'This area hides at once when you leave the app, switch tabs or the screen turns off. To hide it yourself, shake the phone or press and hold the top bar (or an empty part of the conversation) for 3 seconds.'),
+      sw('Shake to hide', 'Shake the phone to jump back to the night sky', () => S.settings.shake !== false, async (on) => { S.settings.shake = on; core.saveSettings(); if (on) { const r = await MC.stealth.askMotion(); if (r === 'denied') u.toast('Motion access was declined'); } }),
+      btn('key', 'Change secret code', 'The code you type in the “Name your planet” box', () => openChangeCode()),
+      h('div', { class: 'set-sec' }, 'Security'),
+      h('div', { class: 'muted small pad' }, 'The app locks when it is closed or away for over a minute. Unlock with your username and password. Your Galaxy Key is saved on this device, encrypted with your password.'),
+      btn('lock', 'Lock now', 'Alerts keep working', () => core.lockNow()),
+      btn('edit', 'Change password', 'The saved Galaxy Key is re-encrypted with the new password', () => openChangePassword()),
+      btn('key', 'Re-enter Galaxy Key', 'Removes the saved key from this device', () => confirmBox({ title: 'Re-enter the Galaxy Key?', text: 'The saved key is removed from this device. After logging in you will enter the same Galaxy Key again.', ok: 'Continue' }).then((y) => { if (y) core.forgetKey(); })),
     ];
-    if (ui.installEvt) rows.push(h('button', { class: 'set-btn', onclick: async () => { ui.installEvt.prompt(); ui.installEvt = null; } }, h('span', { html: u.ic('download') }), h('div', {}, h('div', {}, 'Install MyChat app'), h('div', { class: 'muted small' }, 'Home screen par add karo'))));
-    else if (/iphone|ipad/i.test(navigator.userAgent) && !window.navigator.standalone) rows.push(h('div', { class: 'muted small pad' }, 'iPhone: Safari me Share ⬆ → "Add to Home Screen" se app install karo.'));
-    rows.push(h('button', { class: 'set-btn danger', onclick: () => confirmBox({ title: 'Log out?', text: 'Logout par is device se saved Secret Key, notifications aur baaki sab local data hat jayega. Dobara login par Secret Key daalni padegi.', ok: 'Log out', danger: true }).then((y) => { if (y) core.logout(); }) },
-      h('span', { html: u.ic('logout') }), h('div', {}, 'Log out')));
-    rows.push(h('div', { class: 'muted small pad' }, 'MyChat v' + (window.MYCHAT_VERSION || '?')));
+    if (ui.installEvt) rows.push(btn('download', 'Install Galaxy Relax', 'Add it to your home screen', async () => { ui.installEvt.prompt(); ui.installEvt = null; }));
+    else if (/iphone|ipad/i.test(navigator.userAgent) && !window.navigator.standalone) rows.push(h('div', { class: 'muted small pad' }, 'iPhone: in Safari tap Share, then “Add to Home Screen”, to install the app.'));
+    rows.push(btn('logout', 'Log out', null, () => confirmBox({ title: 'Log out?', text: 'This removes the saved Galaxy Key, alerts and all other data from this device. You will enter the Galaxy Key again next time.', ok: 'Log out', danger: true }).then((y) => { if (y) core.logout(); }), true));
+    rows.push(h('div', { class: 'muted small pad' }, 'Galaxy Relax v' + (window.MYCHAT_VERSION || '?')));
     openModal({ title: 'Settings', cls: 'tall', body: [h('div', { class: 'set-list' }, rows)] });
   }
 
@@ -876,7 +1039,7 @@
   function bindEvents() {
     bindMessages();
     el.btnMe.addEventListener('click', openProfile);
-    el.btnTheme.addEventListener('click', () => { core.setTheme(core.resolvedTheme() === 'dark' ? 'light' : 'dark'); });
+    el.btnTheme.addEventListener('click', () => { openModal({ title: 'Themes', body: [h('div', { style: { padding: '8px 0 22px' } }, openSkins())] }); });
     el.btnStarred.addEventListener('click', openStarred);
     el.btnMenu.addEventListener('click', () => {
       const r = el.btnMenu.getBoundingClientRect();
@@ -884,8 +1047,9 @@
         { icon: 'person', label: 'Profile', fn: openProfile },
         { icon: 'star', label: 'Starred messages', fn: openStarred },
         { icon: 'settings', label: 'Settings', fn: openSettings },
-        { icon: 'lock', label: 'Lock app', fn: () => core.lockNow() },
-        { icon: 'logout', label: 'Log out', danger: true, fn: () => confirmBox({ title: 'Log out?', text: 'Logout par is device ka saved Secret Key aur sab local data hat jayega.', ok: 'Log out', danger: true }).then((y) => { if (y) core.logout(); }) },
+        { icon: 'moonStar', label: 'Back to the sky', fn: () => MC.stealth.hide('panic') },
+        { icon: 'lock', label: 'Lock', fn: () => core.lockNow() },
+        { icon: 'logout', label: 'Log out', danger: true, fn: () => confirmBox({ title: 'Log out?', text: 'This removes the saved Galaxy Key and all other data from this device.', ok: 'Log out', danger: true }).then((y) => { if (y) core.logout(); }) },
       ], { x: r.right, y: r.bottom + 4, right: true });
     });
     el.nbOn.addEventListener('click', async () => { await core.askNotif(); maybeNotifBanner(); });
@@ -902,6 +1066,7 @@
         { icon: 'person', label: 'Contact info', fn: openContact },
         { icon: 'search', label: 'Search', fn: openMsgSearch },
         { icon: 'star', label: 'Starred messages', fn: openStarred },
+        { icon: 'moonStar', label: 'Back to the sky', fn: () => MC.stealth.hide('panic') },
       ], { x: r.right, y: r.bottom + 4, right: true });
     });
     el.msClose.addEventListener('click', () => closeMsgSearch());
@@ -927,7 +1092,8 @@
     el.btnAttach.addEventListener('click', attachMenu);
     ['file-img', 'file-cam', 'file-doc'].forEach((id) => {
       const inp = document.getElementById(id);
-      inp.addEventListener('change', () => { if (inp.files.length) previewFiles(inp.files); inp.value = ''; });
+      inp.addEventListener('change', () => { MC.stealth.release(); if (inp.files.length) previewFiles(inp.files); inp.value = ''; });
+      inp.addEventListener('cancel', () => MC.stealth.release());
     });
     el.recCancel.addEventListener('click', () => stopRecording(false));
     el.recSend.addEventListener('click', () => { stopRecording(true); forceStick = true; });
@@ -941,7 +1107,7 @@
 
     // keyboard: Esc
     document.addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || !ui.ready) return;
       const lb = $('.lightbox'); if (lb) return lb.remove();
       if ($('#menu-root .menu')) return closeMenu();
       const ovs = document.querySelectorAll('.overlay'); if (ovs.length) return ovs[ovs.length - 1]._close();
@@ -954,10 +1120,10 @@
 
     window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); ui.installEvt = e; });
     if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', () => { setVh(); window.scrollTo(0, 0); if (isNearBottom()) scrollBottom(); });
+      window.visualViewport.addEventListener('resize', () => { setVh(); window.scrollTo(0, 0); if (ui.ready && isNearBottom()) scrollBottom(); });
     }
     window.addEventListener('resize', setVh);
-    setInterval(() => { if (!document.hidden) ui.updateStatus(); }, 20000);
+    setInterval(() => { if (!document.hidden && ui.ready) ui.updateStatus(); }, 20000);
   }
 
   ui.confirmBox = confirmBox;

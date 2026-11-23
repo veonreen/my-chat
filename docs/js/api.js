@@ -1,4 +1,4 @@
-/* MyChat — backend client (v2: WebSocket / Socket.io).
+/* Galaxy Relax: backend client (v2: WebSocket / Socket.io).
  * - Normal actions (send, edit, seen, typing ...) WebSocket par chalte hain => instant.
  * - Server events PUSH karta hai: 'upd' (msgs), 'peers' (online), 'typing', 'pv' (profile).
  * - login/signup/config, upload/file (bade data) HTTP POST se jaate hain.
@@ -24,12 +24,12 @@
 
     /** WebSocket kholo. Pehli baar connect hone par resolve; auth galat ho to ApiError('auth'). */
     connect() {
-      if (!api.base() || /PASTE/.test(api.base())) return Promise.reject(new ApiError('no_api', 'Backend URL set nahi hai (docs/js/config.js)'));
+      if (!api.base() || /PASTE/.test(api.base())) return Promise.reject(new ApiError('no_api', 'The server address is not configured (docs/js/config.js)'));
       api.disconnect();
       return new Promise((resolve, reject) => {
         let first = true;
         const s = (api.socket = window.io(api.base(), {
-          auth: (cb) => cb({ token: api.token, vis: !document.hidden }),
+          auth: (cb) => cb({ token: api.token, vis: !document.hidden && !!(MC.stealth && MC.stealth.isChat()) }),
           transports: ['websocket', 'polling'],
           reconnectionDelay: 400, reconnectionDelayMax: 4000, timeout: 10000,
         }));
@@ -41,13 +41,13 @@
         s.on('connect_error', (e) => {
           api.connected = false;
           if (e && e.message === 'auth') {
-            if (first) { first = false; s.close(); reject(new ApiError('auth', 'Session expire')); } else { s.close(); api._emit('autherr'); }
+            if (first) { first = false; s.close(); reject(new ApiError('auth', 'Session ended')); } else { s.close(); api._emit('autherr'); }
             return;
           }
-          if (first) { first = false; s.close(); reject(new ApiError('network', 'Server se connect nahi ho pa raha')); }
+          if (first) { first = false; s.close(); reject(new ApiError('network', 'Cannot reach the server')); }
           else api._emit('state', false);
         });
-        ['upd', 'peers', 'typing', 'pv', 'revoked'].forEach((ev) => s.on(ev, (d) => api._emit(ev, d)));
+        ['upd', 'peers', 'typing', 'pv', 'revoked', 'sc'].forEach((ev) => s.on(ev, (d) => api._emit(ev, d)));
       });
     },
     disconnect() {
@@ -75,7 +75,7 @@
     _rpc(body, timeout) {
       return new Promise((resolve, reject) => {
         api.socket.timeout(timeout).emit('rpc', body, (err, j) => {
-          if (err) return reject(new ApiError('network', 'Server se jawab nahi aaya'));
+          if (err) return reject(new ApiError('network', 'The server did not answer'));
           api._done(j, resolve, reject);
         });
       });
@@ -83,7 +83,7 @@
 
     async _http(body, timeout) {
       const url = api.base();
-      if (!url || /PASTE/.test(url)) throw new ApiError('no_api', 'Backend URL set nahi hai (docs/js/config.js)');
+      if (!url || /PASTE/.test(url)) throw new ApiError('no_api', 'The server address is not configured (docs/js/config.js)');
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeout);
       let res;
@@ -95,17 +95,17 @@
           signal: ctrl.signal,
         });
       } catch (e) {
-        throw new ApiError('network', 'Server se connect nahi ho pa raha');
+        throw new ApiError('network', 'Cannot reach the server');
       } finally {
         clearTimeout(timer);
       }
       let j;
-      try { j = await res.json(); } catch (e) { throw new ApiError('bad_response', 'Server ne galat jawab diya'); }
+      try { j = await res.json(); } catch (e) { throw new ApiError('bad_response', 'The server sent a bad reply'); }
       return new Promise((resolve, reject) => api._done(j, resolve, reject));
     },
 
     _done(j, resolve, reject) {
-      if (!j || !j.ok) return reject(new ApiError((j && j.error) || 'server', (j && j.msg) || 'Kuch gadbad ho gayi'));
+      if (!j || !j.ok) return reject(new ApiError((j && j.error) || 'server', (j && j.msg) || 'Something went wrong'));
       resolve(j);
     },
   });

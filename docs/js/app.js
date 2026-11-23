@@ -1,4 +1,4 @@
-/* MyChat — core logic: state, auth, E2EE data flow, realtime (Socket.io), sending */
+/* Galaxy Relax: core logic: state, auth, E2EE data flow, realtime (Socket.io), sending, reactions */
 (function () {
   const MC = window.MC;
   const { u, api } = MC;
@@ -16,32 +16,28 @@
     byId: new Map(),          // msgId -> message
     current: null,            // open chat peer uid
     since: 0, pv: '', peers: {}, more: {}, running: false, vapid: '', pushOn: false,
-    settings: Object.assign({ theme: 'system', sound: true, notif: true }, LS.get('mychat.settings', {})),
+    settings: Object.assign({ skin: 'galaxy', sound: true, notif: true, effects: true, shake: true }, LS.get('mychat.settings', {})),
     replyTo: null, editing: null, drafts: {}, searchQ: '', typingAt: 0,
   });
 
   const EDIT_WINDOW = 15 * 60 * 1000;
   const MAX_FILE = 6 * 1024 * 1024;
 
-  // ================= Theme / settings =================
-  const resolvedTheme = () => {
-    const t = S.settings.theme;
-    if (t === 'system') return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    return t;
-  };
+  // ================= Skins / settings =================
+  const SKINS = ['galaxy', 'neon', 'sunset', 'ocean'];
+  const SKIN_BAR = { galaxy: '#0B0E1A', neon: '#07040F', sunset: '#1B0B26', ocean: '#04121F' };
+  const resolvedTheme = () => (SKINS.includes(S.settings.skin) ? S.settings.skin : 'galaxy');
   function applyTheme() {
     const r = resolvedTheme();
-    document.documentElement.dataset.theme = r;
+    document.documentElement.dataset.skin = r;
     const meta = document.querySelector('meta[name=theme-color]');
-    if (meta) meta.content = r === 'dark' ? '#202c33' : '#f0f2f5';
-    document.documentElement.style.setProperty('--doodle', r === 'dark' ? u.doodle('#ffffff', 0.05) : u.doodle('#5b5340', 0.1));
+    if (meta) meta.content = SKIN_BAR[r];
   }
   const saveSettings = () => LS.set('mychat.settings', S.settings);
-  function setTheme(t) {
-    S.settings.theme = t; saveSettings(); applyTheme();
+  function setSkin(t) {
+    S.settings.skin = SKINS.includes(t) ? t : 'galaxy'; saveSettings(); applyTheme();
     if (MC.ui && MC.ui.themeChanged) MC.ui.themeChanged();
   }
-  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (S.settings.theme === 'system') applyTheme(); });
 
   // ================= Helpers =================
   const peerOf = (m) => (m.from === S.uid ? m.to : m.from);
@@ -56,23 +52,24 @@
   const canEdit = (m) => m.from === S.uid && m.type === 'text' && !m.deleted && !m.pending && !m.failed && Date.now() - m.ts < EDIT_WINDOW;
   const sortAll = () => { for (const a of S.msgs.values()) a.sort((x, y) => x.ts - y.ts || (x.id < y.id ? -1 : 1)); };
   const nextTs = (peer) => { const l = lastMsg(peer); return Math.max(Date.now(), l ? l.ts + 1 : 0); };
-  const nameOf = (uid) => { const x = S.users.get(uid); return x ? x.name : 'User'; };
+  const nameOf = (uid) => { const x = S.users.get(uid); return x ? x.name : 'Someone'; };
 
   function preview(m) {
     if (!m) return '';
     if (m.deleted) return m.from === S.uid ? 'You deleted this message' : 'This message was deleted';
-    if (!m.dec) return '🔒 Encrypted message';
-    if (m.type === 'image') return '📷 ' + (m.t || 'Photo');
-    if (m.type === 'file') return m.f && m.f.v ? '🎤 Voice message' : '📄 ' + (m.f ? m.f.n : 'Document');
+    if (!m.dec) return 'Encrypted message';
+    if (m.type === 'image') return m.t || 'Photo';
+    if (m.type === 'file') return m.f && m.f.v ? 'Voice message' : (m.f ? m.f.n : 'Document');
     return m.t;
   }
 
+  // Stealth: the tab/app title is always the app name and no unread badge is ever shown on the icon.
   function updateTitle() {
-    const n = totalUnread();
-    document.title = n ? `(${n}) MyChat` : 'MyChat';
-    try { if (navigator.setAppBadge) { n ? navigator.setAppBadge(n) : navigator.clearAppBadge(); } } catch (e) { /* ignore */ }
+    document.title = 'Galaxy Relax';
+    try { if (navigator.clearAppBadge) navigator.clearAppBadge(); } catch (e) { /* ignore */ }
   }
   function refreshUI() {
+    if (MC.stealth) MC.stealth.unread(totalUnread());       // decoy: the little star glows when something is unread
     if (!MC.ui || !MC.ui.ready) return;
     MC.ui.renderSidebar();
     MC.ui.chatChanged();
@@ -107,16 +104,28 @@
       m.t = o.t || ''; m.rp = o.rp || null; m.f = o.f || null; m.dec = true;
     } catch (e) { m.t = ''; m.rp = null; m.f = null; m.dec = false; }
   }
-  async function mergeMsgs(list) {
-    const added = [];
+  /** reactions arrive as {uid: encryptedEmoji}; each is bound to (message id, reactor) so it cannot be moved */
+  async function decReacts(m, enc) {
+    const out = {};
+    for (const uid of Object.keys(enc || {})) {
+      try { const e = await C.decStr(S.key, enc[uid], m.id + ':rx:' + uid); if (e) out[uid] = e; } catch (err) { /* ignore a bad one */ }
+    }
+    return out;
+  }
+  async function mergeMsgs(list, live) {
+    const added = [], reacted = [];
     await Promise.all(list.map(async (sm) => {
       let m = S.byId.get(sm.id);
       const isNew = !m;
       if (!m) { m = {}; S.byId.set(sm.id, m); }
       const same = m._pl === sm.payload && m.dec !== undefined;
+      const before = m.rx || {};
       Object.assign(m, sm, { pending: false, failed: false, uploading: false });
+      m.rx = await decReacts(m, sm.reacts);
+      if (live && !isNew) for (const uid of Object.keys(m.rx)) if (uid !== S.uid && m.rx[uid] !== before[uid]) reacted.push({ m, emoji: m.rx[uid] });
       if (!same) { m._pl = sm.payload; await decodePayload(m); }
       if (isNew) {
+        if (live) m._fresh = true;
         const peer = peerOf(m);
         if (!S.msgs.has(peer)) S.msgs.set(peer, []);
         S.msgs.get(peer).push(m);
@@ -124,6 +133,7 @@
       }
     }));
     sortAll();
+    added.reacted = reacted;
     return added;
   }
 
@@ -162,9 +172,9 @@
   }
 
   async function signup({ username, password, name, secret }) {
-    if (secret.length < 6) throw new api.ApiError('weak_key', 'Secret Key kam se kam 6 characters ki rakho');
+    if (secret.length < 6) throw new api.ApiError('weak_key', 'Your Galaxy Key needs at least 6 characters');
     const cfg = await api.call('config');
-    if (cfg.full) throw new api.ApiError('full', 'Ye private chat hai, 2 users already hain');
+    if (cfg.full) throw new api.ApiError('full', 'This galaxy already has two explorers');
     const proof = await C.proof(secret);
     let key = null, ksalt, kc;
     if (!cfg.hasWorkspace) {          // pehla user => workspace + key-check banao
@@ -175,7 +185,7 @@
     const r = await api.call('signup', { username, password: await C.pwHash(username, password), proof, ksalt, kc, ua: navigator.userAgent.slice(0, 100) });
     if (!key) {
       key = await C.deriveKey(secret, r.ksalt);
-      if (!(await C.verifyKc(key, r.kc))) throw new api.ApiError('wrong_key', 'Secret Key galat hai');
+      if (!(await C.verifyKc(key, r.kc))) throw new api.ApiError('wrong_key', 'The Galaxy Key is wrong');
     }
     const st = await afterAuth(r, { key, secret, password });
     if (name) { try { await saveProfile({ name }); } catch (e) { /* baad me profile se set kar sakte */ } }
@@ -185,7 +195,7 @@
   /** Vault nahi mila => Secret Key haath se daali. remember=true => password se encrypt karke vault me rakho. */
   async function unlock(secret, remember) {
     const key = await C.deriveKey(secret, S.ksalt);
-    if (!(await C.verifyKc(key, S.kc))) throw new api.ApiError('wrong_key', 'Secret Key galat hai');
+    if (!(await C.verifyKc(key, S.kc))) throw new api.ApiError('wrong_key', 'The Galaxy Key is wrong');
     S.key = key;
     if (remember && pendingPw) await C.vaultSave(S.me.username, pendingPw, secret); else if (!remember) C.vaultClear();
     pendingPw = null;
@@ -206,11 +216,11 @@
     S.running = false;
     if (api.token && !(opts && opts.skipServer)) api.beacon('logout', { keepPush: true });
     api.disconnect(); api.token = null; pendingPw = null;
-    flash(msg || 'App lock ho gaya. Dobara login karo.');
+    flash(msg || 'Locked. Log in to continue.');
     location.reload();
   }
-  const lockNow = () => lock('App lock ho gaya. Unlock karne ke liye login karo.');
-  const forceLogout = (msg) => lock(msg || 'Session expire ho gaya. Dobara login karo.', { skipServer: true });
+  const lockNow = () => lock('Locked. Log in to continue.');
+  const forceLogout = (msg) => lock(msg || 'Your session has ended. Please log in again.', { skipServer: true });
 
   /** Poora logout: push band, server session delete, vault/key/settings sab local data saaf. */
   async function logout() {
@@ -228,8 +238,8 @@
    */
   async function changePassword(oldPw, newPw) {
     const username = S.me.username;
-    if (newPw.length < 6) throw new api.ApiError('weak_password', 'Naya password kam se kam 6 characters ka rakho');
-    if (newPw === oldPw) throw new api.ApiError('same_password', 'Naya password purane jaisa nahi ho sakta');
+    if (newPw.length < 6) throw new api.ApiError('weak_password', 'The new password needs at least 6 characters');
+    if (newPw === oldPw) throw new api.ApiError('same_password', 'The new password must differ from the old one');
     const [oldH, newH] = [await C.pwHash(username, oldPw), await C.pwHash(username, newPw)];
     const mine = C.vaultUser() === username;
     const newVault = mine ? await C.vaultRewrap(username, oldPw, newPw) : null;
@@ -239,11 +249,11 @@
   }
 
   /** Settings: "Secret Key dobara daalo" => vault hatao aur lock karo (agle login par Secret Key poochega). */
-  function forgetKey() { C.vaultClear(); lock('Secret Key hata di. Login karke dobara daalo.'); }
+  function forgetKey() { C.vaultClear(); lock('Galaxy Key removed. Log in and enter it again.'); }
 
   // ---- Auto-lock: background 1 min+ / sleep / app band ----
   let hiddenAt = 0, lockTimer = null, lastTick = Date.now();
-  const LOCK_MSG = 'App 1 minute se zyada background me tha, isliye lock ho gaya. Dobara login karo.';
+  const LOCK_MSG = 'Locked after a minute away. Log in to continue.';
   function checkLock() { if (S.running && hiddenAt && Date.now() - hiddenAt >= LOCK_AFTER_MS) lock(LOCK_MSG); }
   document.addEventListener('visibilitychange', () => {
     clearTimeout(lockTimer);
@@ -263,6 +273,7 @@
   async function fullSync() {
     const r = await api.call('sync', {}, { timeout: 40000 });
     S.pv = r.pv; S.peers = r.peers || {}; S.vapid = r.vapid || S.vapid;
+    if (MC.stealth) MC.stealth.syncCode(r.sc);
     await setUsers(r.users);
     S.msgs.clear(); S.byId.clear();
     await mergeMsgs(r.msgs);
@@ -294,12 +305,12 @@
       if (r.peers) S.peers = mergePeers(r.peers);
       if (r.pv && r.pv !== S.pv) { S.pv = r.pv; refreshUsers(); }
       if (r.msgs && r.msgs.length) {
-        const added = await mergeMsgs(r.msgs);
+        const added = await mergeMsgs(r.msgs, true);
         bumpSince(r.msgs);
         notifyIncoming(added);
       }
       refreshUI(); autoSeen();
-    } catch (e) { if (e.code === 'auth') forceLogout('Session expire ho gaya. Dobara login karo.'); }
+    } catch (e) { if (e.code === 'auth') forceLogout('Your session has ended. Please log in again.'); }
   }
 
   function mergePeers(inc) {
@@ -307,19 +318,23 @@
     for (const k of Object.keys(inc)) out[k] = Object.assign({}, out[k], inc[k], { typingTo: out[k] && out[k].typingTo });
     return out;
   }
-  function sendVis() { if (S.running) api.call('vis', { vis: !document.hidden }, { timeout: 8000 }).catch(() => {}); }
+  // Presence = actually looking at the private area. In the decoy sky you appear offline.
+  const isVisible = () => !document.hidden && !!(MC.stealth && MC.stealth.isChat());
+  function sendVis() { if (S.running) api.call('vis', { vis: isVisible() }, { timeout: 8000 }).catch(() => {}); }
 
   let bound = false;
   function bindRealtime() {
     if (bound) return; bound = true;
     api.on('upd', async (d) => {
       if (!S.running || !d || !d.msgs) return;
-      const added = await mergeMsgs(d.msgs);
+      const added = await mergeMsgs(d.msgs, true);
       bumpSince(d.msgs);
       for (const m of added) if (m.from !== S.uid && S.peers[m.from]) { S.peers[m.from].typingTo = ''; clearTimeout(typingTimers[m.from]); }
       notifyIncoming(added);
       refreshUI(); autoSeen();
+      if (MC.ui && MC.ui.ready) added.reacted.forEach((x) => MC.ui.reactFx(x.m, x.emoji));
     });
+    api.on('sc', (rec) => { if (MC.stealth) MC.stealth.syncCode(rec); });
     api.on('peers', (d) => { if (!S.running) return; S.peers = mergePeers(d); if (MC.ui) { MC.ui.updateStatus(); MC.ui.presenceChanged(); } });
     api.on('typing', (d) => {
       if (!S.running || !d || !d.from) return;
@@ -331,8 +346,8 @@
     api.on('pv', (d) => { if (S.running && d && d.pv !== S.pv) { S.pv = d.pv; refreshUsers(); } });
     api.on('state', (ok) => { if (MC.ui && MC.ui.setConn) MC.ui.setConn(ok); });
     api.on('reconnected', () => { catchUp(); });
-    api.on('autherr', () => forceLogout('Session expire ho gaya. Dobara login karo.'));
-    api.on('revoked', () => forceLogout('Password badal diya gaya. Naye password se login karo.'));   // dusre device se password change hua
+    api.on('autherr', () => forceLogout('Your session has ended. Please log in again.'));
+    api.on('revoked', () => forceLogout('Your password was changed. Log in with the new one.'));   // dusre device se password change hua
   }
   function pollNow() { autoSeen(); if (S.running && !api.connected && api.socket) api.socket.connect(); }
   async function refreshUsers() {
@@ -381,30 +396,22 @@
     if (!inc.length) return;
     const last = inc[inc.length - 1];
     const active = isActive() && S.current === last.from;
-    if (S.settings.sound) u.beep('in');
+    const chatOpen = !!(MC.stealth && MC.stealth.isChat());
+    if (S.settings.sound && chatOpen) u.sfx('in');
+    if (chatOpen && S.current === last.from && MC.fx) MC.fx.wordFx(last.t);
     if (!active && S.settings.notif && !(S.pushOn && document.hidden) && 'Notification' in window && Notification.permission === 'granted') {
-      const title = nameOf(last.from);
-      const body = (inc.length > 1 ? `${inc.length} new messages · ` : '') + preview(last);
-      const opts = { body, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: 'chat-' + last.from, renotify: true, data: { peer: last.from } };
+      // Stealth: always the same text. No sender, no message text, no "chat".
+      const title = 'Galaxy Relax';
+      const opts = { body: '🌟 A new star is shining', icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: 'star', renotify: true };
       if (navigator.serviceWorker && navigator.serviceWorker.controller) {
         navigator.serviceWorker.ready.then((reg) => reg.showNotification(title, opts)).catch(() => {});
       } else {
-        try { const n = new Notification(title, opts); n.onclick = () => { window.focus(); MC.ui.openChat(last.from); n.close(); }; } catch (e) { /* ignore */ }
+        try { const n = new Notification(title, opts); n.onclick = () => { window.focus(); n.close(); }; } catch (e) { /* ignore */ }
       }
     }
   }
-  // Notification click: app unlock hai to chat kholo, locked hai to login ke baad kholo
-  let pendingPeer = null;
-  try {
-    const q = new URLSearchParams(location.search).get('peer');
-    if (q) { pendingPeer = q; history.replaceState(null, '', location.pathname); }
-  } catch (e) { /* ignore */ }
-  const openPending = () => { if (pendingPeer && MC.ui && MC.ui.ready && S.users.has(pendingPeer)) { MC.ui.openChat(pendingPeer); pendingPeer = null; } };
-  if (navigator.serviceWorker) {
-    navigator.serviceWorker.addEventListener('message', (e) => {
-      if (e.data && e.data.type === 'open-chat') { pendingPeer = e.data.peer; openPending(); }
-    });
-  }
+  // A tapped alert only brings the app forward (decoy sky). It never opens the private area by itself.
+  try { if (new URLSearchParams(location.search).has('peer')) history.replaceState(null, '', location.pathname); } catch (e) { /* ignore */ }
 
   // ================= Sending =================
   let queue = Promise.resolve();
@@ -430,7 +437,8 @@
     S.byId.set(m.id, m);
     if (!S.msgs.has(m.to)) S.msgs.set(m.to, []);
     S.msgs.get(m.to).push(m);
-    if (S.settings.sound) u.beep('out');
+    if (S.settings.sound) u.sfx('out');
+    m._fresh = true;
     MC.ui.localAdded(m);
     refreshUI();
   }
@@ -446,7 +454,7 @@
   }
   function failed(m, e) {
     m.failed = true; m.pending = false; m.uploading = false;
-    if (e && e.code === 'auth') return forceLogout('Session expire ho gaya. Dobara login karo.');
+    if (e && e.code === 'auth') return forceLogout('Your session has ended. Please log in again.');
     MC.ui.msgChanged(m);
     if (e && e.code && e.code !== 'network') u.toast(e.message);
   }
@@ -455,11 +463,12 @@
     text = (text || '').trim();
     if (!text || !S.current) return false;
     if (S.editing) { editMsg(S.editing, text); return true; }
-    if (text.length > 4000) { u.toast('Message bahut lamba hai (max 4000 characters)'); return false; }
+    if (text.length > 4000) { u.toast('That is too long (max 4000 characters)'); return false; }
     const m = newLocal('text', S.current, { t: text });
     attachReply(m);
     m._send = async () => { try { await transmit(m); } catch (e) { failed(m, e); } };
     addLocal(m); enqueue(m);
+    if (MC.fx) MC.fx.wordFx(text);
     return true;
   }
 
@@ -518,7 +527,7 @@
               try { const z = await gz(bytes, 'z'); if (z.length < bytes.length * 0.95) { bytes = z; m.f.z = 1; } } catch (e) { /* send raw */ }
             }
           }
-          if (bytes.length > MAX_FILE) { const e = new api.ApiError('too_big', 'File 6 MB se badi hai'); throw e; }
+          if (bytes.length > MAX_FILE) { const e = new api.ApiError('too_big', 'That file is larger than 6 MB'); throw e; }
           const ct = await C.encBytes(S.key, bytes);
           const up = await api.call('upload', { data: C.b64e(ct) }, { timeout: 120000 });
           m.fileId = up.fileId;
@@ -532,7 +541,7 @@
     if (!S.current) return;
     files = Array.from(files);
     files.forEach((f, i) => {
-      if (f.size > 25 * 1024 * 1024) { u.toast(`"${f.name}" bahut badi hai (max 6 MB)`); return; }
+      if (f.size > 25 * 1024 * 1024) { u.toast(`"${f.name}" is too large (max 6 MB)`); return; }
       queueFile(f, i === 0 ? caption : '');
     });
   }
@@ -540,7 +549,7 @@
   // ----- voice notes -----
   const rec = { mr: null, chunks: [], t0: 0, stream: null, mime: '' };
   async function recStart() {
-    if (!navigator.mediaDevices || !window.MediaRecorder) throw new Error('Is browser me voice recording support nahi hai');
+    if (!navigator.mediaDevices || !window.MediaRecorder) throw new Error('Voice notes are not supported in this browser');
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find((t) => MediaRecorder.isTypeSupported(t));
     const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
@@ -575,19 +584,38 @@
       const r = await api.call('edit', { id: m.id, payload });
       await mergeMsgs([r.msg]); S.since = Math.max(S.since, r.msg.upd);
       MC.core.clearEdit(); refreshUI();
-    } catch (e) { u.toast(e.message || 'Edit nahi ho paya'); }
+    } catch (e) { u.toast(e.message || 'Could not edit'); }
   }
   async function deleteMsg(m) {
     try {
       const r = await api.call('del', { id: m.id });
       await mergeMsgs([r.msg]); S.since = Math.max(S.since, r.msg.upd);
       refreshUI();
-    } catch (e) { u.toast(e.message || 'Delete nahi ho paya'); }
+    } catch (e) { u.toast(e.message || 'Could not delete'); }
   }
   async function starMsg(m, on) {
     m.starred = on ? 1 : 0; MC.ui.msgChanged(m);
     try { const r = await api.call('star', { id: m.id, on: on ? 1 : 0 }); S.since = Math.max(S.since, r.msg.upd); }
-    catch (e) { m.starred = on ? 0 : 1; MC.ui.msgChanged(m); u.toast('Star nahi ho paya'); }
+    catch (e) { m.starred = on ? 0 : 1; MC.ui.msgChanged(m); u.toast('Could not star this'); }
+  }
+  /** Toggle my emoji reaction on a message (same emoji again = remove). Optimistic, rolled back on failure. */
+  async function react(m, emoji) {
+    const prev = m.rx ? m.rx[S.uid] : undefined;
+    const next = prev === emoji ? '' : emoji;
+    m.rx = Object.assign({}, m.rx);
+    if (next) m.rx[S.uid] = next; else delete m.rx[S.uid];
+    MC.ui.msgChanged(m);
+    try {
+      const enc = next ? await C.encStr(S.key, next, m.id + ':rx:' + S.uid) : '';
+      const r = await api.call('react', { id: m.id, enc });
+      S.since = Math.max(S.since, r.msg.upd || 0);
+      m.upd = r.msg.upd;
+    } catch (e) {
+      m.rx = Object.assign({}, m.rx);
+      if (prev) m.rx[S.uid] = prev; else delete m.rx[S.uid];
+      MC.ui.msgChanged(m); u.toast('Could not send that reaction');
+    }
+    return next;
   }
   async function loadOlder(peer) {
     const arr = (S.msgs.get(peer) || []).filter((m) => !m.pending && !m.failed);
@@ -635,7 +663,7 @@
       const url = await getFileUrl(m);
       const a = document.createElement('a');
       a.href = url; a.download = (m.f && m.f.n) || 'file'; document.body.append(a); a.click(); a.remove();
-    } catch (e) { u.toast('File download nahi ho payi'); }
+    } catch (e) { u.toast('Could not download the file'); }
   }
 
   // ================= Misc UI-state helpers =================
@@ -652,13 +680,12 @@
     await api.connect();            // WebSocket (token galat ho to ApiError 'auth')
     await fullSync();
     S.running = true;
-    MC.ui.start();
+    MC.stealth.begin();               // the decoy sky comes first; the private area opens only with the secret code
     try { history.replaceState(history.state, '', location.pathname + location.search + '#u'); } catch (e) { /* ignore */ }   // SW ko pata chale: app unlocked
     MC.ui.setConn(true);
     updateTitle();
     catchUp();                      // sync ke dauran aaye events na chhute
     setupPush();
-    openPending();
   }
   function retry(m) { if (m.failed && m._send) { enqueue(m); MC.ui.msgChanged(m); } }
 
@@ -669,10 +696,10 @@
   window.addEventListener('keydown', u.unlockAudio, { once: true });
 
   MC.core = {
-    applyTheme, setTheme, saveSettings, resolvedTheme,
+    applyTheme, setSkin, saveSettings, resolvedTheme, SKINS, sendVis, react, isVisible,
     login, signup, unlock, restore, logout, forceLogout, lockNow, forgetKey, changePassword, startApp, afterAuth,
     sendText, sendFiles, recStart, recStop, retry, editMsg, deleteMsg, starMsg, loadOlder, saveProfile,
-    getFileUrl, downloadFile, preview, unreadCount, totalUnread, lastMsg, canEdit, nameOf, peerOf,
+    getFileUrl, downloadFile, preview, unreadCount, totalUnread, lastMsg, canEdit, nameOf, peerOf, lock,
     clearReply, clearEdit, markTyping, pollNow, askNotif, setupPush, dropPush, refreshUI, isActive, updateTitle, mergeMsgs,
   };
 })();

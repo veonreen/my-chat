@@ -1,6 +1,6 @@
 'use strict';
 /**
- * MyChat v2 — realtime backend (Express + Socket.io + SQLite)
+ * Galaxy Relax (MyChat) v3 — realtime backend (Express + Socket.io + SQLite)
  * ------------------------------------------------------------
  * - Server SIRF ciphertext dekhta hai. Secret Key / AES key kabhi yahan nahi aati.
  * - Actions purane Apps Script backend jaise hi hain (send, edit, del, history ...),
@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS files (fileId TEXT PRIMARY KEY, msgId TEXT DEFAULT ''
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, uid TEXT NOT NULL, p256dh TEXT, auth TEXT, created INTEGER);
 `);
+// v3: emoji reactions. reacts = JSON {uid: encryptedEmoji}. Server never sees the emoji (E2EE).
+if (!db.prepare('PRAGMA table_info(messages)').all().some((c) => c.name === 'reacts')) db.exec("ALTER TABLE messages ADD COLUMN reacts TEXT DEFAULT ''");
 
 const q = {
   getMeta: db.prepare('SELECT value FROM meta WHERE key=?'),
@@ -85,6 +87,7 @@ const q = {
   editMsg: db.prepare('UPDATE messages SET payload=?, edited=1, upd=? WHERE id=?'),
   delMsg: db.prepare("UPDATE messages SET payload='', deleted=1, upd=? WHERE id=?"),
   starMsg: db.prepare('UPDATE messages SET starredBy=?, upd=? WHERE id=?'),
+  reactMsg: db.prepare('UPDATE messages SET reacts=?, upd=? WHERE id=?'),
   fileById: db.prepare('SELECT * FROM files WHERE fileId=?'),
   insFile: db.prepare('INSERT INTO files(fileId,msgId,frm,rcv,size,ts) VALUES(?,?,?,?,?,?)'),
   linkFile: db.prepare('UPDATE files SET msgId=?, rcv=? WHERE fileId=?'),
@@ -121,16 +124,20 @@ const nextUpd = () => (lastUpd = Math.max(Date.now(), lastUpd + 1));
 const normUser = (u) => String(u || '').trim().toLowerCase();
 const timingEq = (a, b) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 
+function parseReacts(s) { try { const o = s ? JSON.parse(s) : {}; return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } }
 function msgOut(r, uid) {
   return {
     id: r.id, ts: r.ts, from: r.frm, to: r.rcv, type: r.type, payload: r.payload,
     status: r.status, dAt: r.dAt, sAt: r.sAt, edited: r.edited, deleted: r.deleted,
-    starred: r.starredBy.split(',').includes(uid) ? 1 : 0, upd: r.upd, reply: r.reply, fileId: r.fileId,
+    starred: r.starredBy.split(',').includes(uid) ? 1 : 0, upd: r.upd, reply: r.reply, fileId: r.fileId, reacts: parseReacts(r.reacts),
   };
 }
 function userOut(r) {
   return { uid: r.uid, username: r.username, nameEnc: r.nameEnc, aboutEnc: r.aboutEnc, photoEnc: r.photoEnc, created: r.created, lastSeen: r.lastSeen, profUpd: r.profUpd };
 }
+// Secret-code record for the decoy screen: {s: salt hex, h: PBKDF2 hash hex, i: iterations, n: length, ts}.
+// Only a salted slow hash is stored (never the code), so both phones can share one code and change it together.
+const getSc = () => { const m = q.getMeta.get('sc'); try { return m ? JSON.parse(m.value) : null; } catch (e) { return null; } };
 const uidList = () => q.allUsers.all().map((u) => u.uid);
 const getPv = () => { const m = q.getMeta.get('pv'); return m ? m.value : '0'; };
 const bumpPv = () => { const v = String(Date.now()); q.setMeta.run('pv', v); return v; };
@@ -157,13 +164,13 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-app.get('/', (req, res) => res.json({ ok: true, app: 'MyChat', v: 2, time: Date.now() }));
+app.get('/', (req, res) => res.json({ ok: true, app: 'GalaxyRelax', v: 3, time: Date.now() }));
 app.get('/health', (req, res) => res.json({ ok: true, time: Date.now() }));
 
 // ---- rate limits (login/signup/config par sakht, baaki par dheela) ----
 const rl = (windowMs, max) => rateLimit({
   windowMs, max, standardHeaders: true, legacyHeaders: false,
-  handler: (req, res) => res.status(429).json({ ok: false, error: 'rate_limited', msg: 'Bahut zyada requests. Thodi der baad try karo.' }),
+  handler: (req, res) => res.status(429).json({ ok: false, error: 'rate_limited', msg: 'Too many requests. Please try again in a little while.' }),
 });
 const limitLogin = rl(10 * 60 * 1000, 20);
 const limitSignup = rl(60 * 60 * 1000, 8);
@@ -212,11 +219,11 @@ function pushMsgs(rows, exceptSid) {           // har row ko dono users ke apne 
 }
 
 // ====== WEB PUSH ======
-async function sendPush(toUid, fromUid) {
+async function sendPush(toUid) {
   const subs = q.subsOf.all(toUid);
   if (!subs.length) return;
-  const from = q.userById.get(fromUid);
-  const payload = JSON.stringify({ t: 'msg', from: fromUid, title: from ? from.username : 'MyChat', body: '🔒 Naya message' });
+  // Stealth: no sender name, no message text, no "chat" word. The service worker also ignores anything else.
+  const payload = JSON.stringify({ t: 'star', title: 'Galaxy Relax', body: '🌟 A new star is shining' });
   await Promise.all(subs.map(async (s) => {
     try {
       await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload, { TTL: 86400, urgency: 'high' });
@@ -250,19 +257,19 @@ const PUBLIC = {
   async signup(req) {
     const username = normUser(req.username), pw = String(req.password || ''), proof = String(req.proof || '');
     if (!/^[a-z0-9_.]{3,20}$/.test(username)) throw new E('bad_username', 'Username 3-20 chars: a-z 0-9 _ .');
-    if (!/^[a-f0-9]{64}$/.test(pw)) throw new E('bad_password', 'Password format galat (app update karo)');
+    if (!/^[a-f0-9]{64}$/.test(pw)) throw new E('bad_password', 'Invalid password format (please update the app)');
     if (!/^[a-f0-9]{64}$/.test(proof)) throw new E('bad_proof');
     const salt = rnd(24), hash = await scrypt(pw, salt);          // async hash pehle, phir atomic check
     const ph = sha256(proof);
     const tx = db.transaction(() => {
-      if (q.countUsers.get().c >= MAX_USERS) throw new E('full', 'Ye private chat hai, 2 users already hain');
-      if (q.userByName.get(username)) throw new E('exists', 'Ye username le liya gaya hai');
+      if (q.countUsers.get().c >= MAX_USERS) throw new E('full', 'This galaxy already has two explorers');
+      if (q.userByName.get(username)) throw new E('exists', 'That username is already taken');
       const existing = q.getMeta.get('proofHash');
       if (!existing) {
         const ksalt = String(req.ksalt || ''), kc = String(req.kc || '');
         if (!ksalt || !kc || ksalt.length > 100 || kc.length > 500) throw new E('bad_key');
         q.setMeta.run('proofHash', ph); q.setMeta.run('ksalt', ksalt); q.setMeta.run('kc', kc);
-      } else if (!timingEq(existing.value, ph)) throw new E('wrong_key', 'Secret Key galat hai');
+      } else if (!timingEq(existing.value, ph)) throw new E('wrong_key', 'The Secret Key is wrong');
       const uid = 'u' + rnd(10), now = Date.now();
       q.insUser.run(uid, username, salt, hash, now, now, now);
       bumpPv();
@@ -275,10 +282,10 @@ const PUBLIC = {
   },
   async login(req) {
     const username = normUser(req.username), pw = String(req.password || '');
-    if (lockedOut(username)) throw new E('locked', 'Bahut galat attempts. 10 minute baad try karo');
+    if (lockedOut(username)) throw new E('locked', 'Too many wrong attempts. Try again in 10 minutes');
     const u = username ? q.userByName.get(username) : null;
     const ok = u && /^[a-f0-9]{64}$/.test(pw) && timingEq(await scrypt(pw, u.salt), u.hash);
-    if (!ok) { if (!u) await scrypt('x', 'y'); noteFail(username); throw new E('bad_login', 'Username ya password galat hai'); }
+    if (!ok) { if (!u) await scrypt('x', 'y'); noteFail(username); throw new E('bad_login', 'Wrong username or password'); }
     loginFails.delete(username);
     return { ok: true, token: createSession(u.uid, req.ua), uid: u.uid, me: userOut(u), ksalt: q.getMeta.get('ksalt').value, kc: q.getMeta.get('kc').value };
   },
@@ -296,7 +303,16 @@ const ACTIONS = {
   sync(req, ctx) {
     const rows = q.recent.all({ u: ctx.uid, n: 600 });
     const maxUpd = q.maxUpd.get({ u: ctx.uid }).m;
-    return { ok: true, now: Date.now(), msgs: rows.map((r) => msgOut(r, ctx.uid)), maxUpd, users: q.allUsers.all().map(userOut), pv: getPv(), peers: peersFor(ctx.uid), vapid: VAPID.publicKey };
+    return { ok: true, now: Date.now(), msgs: rows.map((r) => msgOut(r, ctx.uid)), maxUpd, users: q.allUsers.all().map(userOut), pv: getPv(), peers: peersFor(ctx.uid), vapid: VAPID.publicKey, sc: getSc() };
+  },
+  scset(req, ctx) {
+    const r = req.rec || {};
+    const i = Number(r.i), n = Number(r.n);
+    if (!/^[a-f0-9]{32}$/.test(String(r.s || '')) || !/^[a-f0-9]{64}$/.test(String(r.h || '')) || !(i >= 50000 && i <= 600000) || !(n >= 6 && n <= 64)) throw new E('bad_code', 'Invalid secret code record');
+    const rec = { s: r.s, h: r.h, i, n, ts: Date.now() };
+    q.setMeta.run('sc', JSON.stringify(rec));
+    for (const uid of uidList()) emitTo(uid, 'sc', rec, uid === ctx.uid ? ctx.sid : undefined);
+    return { ok: true, rec };
   },
   poll(req, ctx) {                       // reconnect ke baad "kya miss hua" catch-up
     const since = Number(req.since) || 0;
@@ -317,7 +333,7 @@ const ACTIONS = {
     if (to === uid || !uidList().includes(to)) throw new E('bad_to');
     const type = ['text', 'image', 'file'].includes(req.type) ? req.type : 'text';
     const payload = String(req.payload || '');
-    if (!payload || payload.length > MAX_PAYLOAD) throw new E('bad_payload', 'Message bahut bada hai');
+    if (!payload || payload.length > MAX_PAYLOAD) throw new E('bad_payload', 'That is too long to send');
     const reply = String(req.replyId || '').slice(0, 40), fileId = type === 'text' ? '' : String(req.fileId || '').slice(0, 40);
     const dup = q.msgById.get(id);
     if (dup) { if (dup.frm !== uid) throw new E('bad_id'); return { ok: true, dup: true, msg: msgOut(dup, uid) }; }
@@ -332,7 +348,7 @@ const ACTIONS = {
       return q.msgById.get(id);
     })();
     pushMsgs([row], ctx.sid);
-    if (!isOnline(to)) sendPush(to, uid).catch(() => {});
+    if (!isOnline(to)) sendPush(to).catch(() => {});
     return { ok: true, msg: msgOut(row, uid) };
   },
   edit(req, ctx) {
@@ -341,7 +357,7 @@ const ACTIONS = {
     const m = q.msgById.get(String(req.id || ''));
     if (!m) throw new E('not_found');
     if (m.frm !== ctx.uid || m.type !== 'text' || m.deleted) throw new E('forbidden');
-    if (Date.now() - m.ts > EDIT_WINDOW_MS) throw new E('too_late', 'Edit sirf 15 minute tak ho sakta hai');
+    if (Date.now() - m.ts > EDIT_WINDOW_MS) throw new E('too_late', 'Editing is only possible for 15 minutes');
     q.editMsg.run(payload, nextUpd(), m.id);
     const row = q.msgById.get(m.id);
     pushMsgs([row], ctx.sid);
@@ -369,7 +385,21 @@ const ACTIONS = {
     emitTo(ctx.uid, 'upd', { msgs: [msgOut(row, ctx.uid)] }, ctx.sid);   // star sirf mere devices ke liye
     return { ok: true, msg: msgOut(row, ctx.uid) };
   },
-  seen(req, ctx) {                       // mai ye chat khol ke dekh raha hu => blue ticks
+  react(req, ctx) {                      // emoji reaction (encrypted). enc='' => remove my reaction
+    const m = q.msgById.get(String(req.id || ''));
+    if (!m) throw new E('not_found');
+    if (m.frm !== ctx.uid && m.rcv !== ctx.uid) throw new E('forbidden');
+    if (m.deleted) throw new E('forbidden');
+    const enc = String(req.enc || '');
+    if (enc.length > 400) throw new E('too_big', 'Reaction is too large');
+    const map = parseReacts(m.reacts);
+    if (enc) map[ctx.uid] = enc; else delete map[ctx.uid];
+    q.reactMsg.run(Object.keys(map).length ? JSON.stringify(map) : '', nextUpd(), m.id);
+    const row = q.msgById.get(m.id);
+    pushMsgs([row], ctx.sid);
+    return { ok: true, msg: msgOut(row, ctx.uid) };
+  },
+  seen(req, ctx) {                       // I opened this conversation and saw the messages => blue ticks
     const rows = q.seen.all({ u: ctx.uid, p: String(req.peer || ''), now: Date.now(), upd: nextUpd() });
     if (rows.length) pushMsgs(rows, ctx.sid);
     return { ok: true, msgs: rows.map((r) => msgOut(r, ctx.uid)) };
@@ -384,7 +414,7 @@ const ACTIONS = {
     return { ok: true };
   },
   profile(req, ctx) {
-    const chk = (v, max) => { if (v === undefined) return null; v = String(v); if (v.length > max) throw new E('too_big', 'Data bahut bada hai'); return v; };
+    const chk = (v, max) => { if (v === undefined) return null; v = String(v); if (v.length > max) throw new E('too_big', 'That is too large'); return v; };
     const now = Date.now();
     q.setProfile.run({ uid: ctx.uid, nameEnc: chk(req.nameEnc, 2000), aboutEnc: chk(req.aboutEnc, 4000), photoEnc: chk(req.photoEnc, 45000), now });
     const pv = bumpPv();
@@ -393,7 +423,7 @@ const ACTIONS = {
   },
   upload(req, ctx) {
     const data = String(req.data || '');
-    if (!data || data.length > MAX_UPLOAD_B64) throw new E('too_big', 'File bahut badi hai (max ~6 MB)');
+    if (!data || data.length > MAX_UPLOAD_B64) throw new E('too_big', 'That file is too large (max about 6 MB)');
     const buf = Buffer.from(data, 'base64');
     const fileId = 'f' + rnd(14);
     fs.writeFileSync(path.join(DATA_DIR, 'files', fileId), buf, { mode: 0o600 });
@@ -418,10 +448,10 @@ const ACTIONS = {
     const u = q.userById.get(ctx.uid);
     if (!u) throw new E('not_found');
     const oldPw = String(req.oldPassword || ''), newPw = String(req.newPassword || '');
-    if (!/^[a-f0-9]{64}$/.test(oldPw) || !/^[a-f0-9]{64}$/.test(newPw)) throw new E('bad_password', 'Password format galat (app update karo)');
-    if (lockedOut(u.username)) throw new E('locked', 'Bahut galat attempts. 10 minute baad try karo');
-    if (!timingEq(await scrypt(oldPw, u.salt), u.hash)) { noteFail(u.username); throw new E('bad_password', 'Current password galat hai'); }
-    if (oldPw === newPw) throw new E('same_password', 'Naya password purane jaisa nahi ho sakta');
+    if (!/^[a-f0-9]{64}$/.test(oldPw) || !/^[a-f0-9]{64}$/.test(newPw)) throw new E('bad_password', 'Invalid password format (please update the app)');
+    if (lockedOut(u.username)) throw new E('locked', 'Too many wrong attempts. Try again in 10 minutes');
+    if (!timingEq(await scrypt(oldPw, u.salt), u.hash)) { noteFail(u.username); throw new E('bad_password', 'Current password is wrong'); }
+    if (oldPw === newPw) throw new E('same_password', 'The new password must differ from the old one');
     loginFails.delete(u.username);
     const salt = rnd(24), hash = await scrypt(newPw, salt);
     q.setPw.run(salt, hash, u.uid);
@@ -447,7 +477,7 @@ async function dispatch(req, ctx) {
 function errOut(err) {
   if (err && err.code && typeof err.code === 'string' && err instanceof E) return { ok: false, error: err.code, msg: err.message };
   console.error(err && err.stack || err);
-  return { ok: false, error: 'server', msg: 'Server me gadbad hui' };
+  return { ok: false, error: 'server', msg: 'Something went wrong on the server' };
 }
 
 // ---- HTTP: public actions + fallback + upload/file (bade payload) ----
@@ -484,7 +514,7 @@ io.on('connection', (socket) => {
   socket.on('rpc', async (req, cb) => {
     if (typeof cb !== 'function') return;
     const now = Date.now(); if (now - t0 > 10000) { t0 = now; bucket = 0; }
-    if (++bucket > 200) return cb({ ok: false, error: 'rate_limited', msg: 'Bahut tez. Thoda ruko.' });
+    if (++bucket > 200) return cb({ ok: false, error: 'rate_limited', msg: 'Too fast. Please slow down.' });
     try { cb(await dispatch(req, { uid, sid: socket.id, token: socket.data.token })); } catch (e) { cb(errOut(e)); }
   });
   socket.on('disconnect', () => {
@@ -502,7 +532,7 @@ setInterval(() => { try { q.purgeSessions.run(Date.now()); } catch (e) { /* igno
 process.on('unhandledRejection', (e) => console.error('unhandledRejection', e));
 
 if (require.main === module) {
-  server.listen(PORT, '0.0.0.0', () => console.log(`MyChat v2 listening on :${PORT}  data=${DATA_DIR}  origins=${ORIGINS.join(',')}`));
+  server.listen(PORT, '0.0.0.0', () => console.log(`Galaxy Relax v3 listening on :${PORT}  data=${DATA_DIR}  origins=${ORIGINS.join(',')}`));
   const stop = () => { io.close(); server.close(); try { db.close(); } catch (e) { /* ignore */ } process.exit(0); };
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
 }

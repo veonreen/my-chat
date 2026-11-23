@@ -1,4 +1,4 @@
 // Backend (apna VPS: Node + Socket.io, Traefik ke peeche HTTPS/WSS) ka URL.
 window.MYCHAT_API = "https://chat.srv1898582.hstgr.cloud";
-// App version (Settings ke neeche dikhta hai: dono phones par same dikhna chahiye). sw.js ka CACHE bhi saath me badlo.
-window.MYCHAT_VERSION = "2.2.0";
+// App version (shown at the bottom of Settings; both phones should show the same). Change CACHE in sw.js together with it.
+window.MYCHAT_VERSION = "3.0.0";

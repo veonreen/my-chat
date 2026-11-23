@@ -3,123 +3,145 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<title>MyChat</title>
-<meta name="description" content="MyChat - private end-to-end encrypted chat">
-<meta name="theme-color" content="#f0f2f5">
+<title>Galaxy Relax</title>
+<meta name="description" content="Galaxy Relax - drift through a calm 3D night sky">
+<meta name="theme-color" content="#0B0E1A">
+<meta name="color-scheme" content="dark">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="MyChat">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Galaxy Relax">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preload" href="fonts/sora.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/manrope.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 
 <!-- Splash -->
-<div id="splash"><img src="icons/logo.svg" alt="" width="84" height="84"><div class="splash-name">MyChat</div><div class="splash-bar"><i></i></div><div class="splash-lock">End-to-end encrypted</div></div>
+<div id="splash"><div class="sp-planet"><img src="icons/logo.svg" alt="" width="96" height="96"></div><div class="splash-name">Galaxy Relax</div><div class="splash-bar"><i></i></div><div class="splash-lock">Breathe in. Breathe out.</div></div>
 
-<!-- Auth -->
+<!-- Login / sign up -->
 <div id="auth" class="screen hidden">
-  <div class="auth-band"></div>
-  <div class="auth-top"><img src="icons/logo.svg" alt="" width="34" height="34"><span>MyChat</span></div>
+  <div class="nebula" aria-hidden="true"></div>
+  <div class="auth-top"><img src="icons/logo.svg" alt="" width="34" height="34"><span>Galaxy Relax</span></div>
   <div class="auth-card">
-    <div class="auth-tabs"><button id="tab-login" class="on" type="button">Login</button><button id="tab-signup" type="button">Sign up</button><i id="tab-ink"></i></div>
-    <h1 id="auth-title">Welcome back</h1>
-    <p id="auth-sub" class="muted">Apne username aur password se login karo.</p>
+    <div class="auth-tabs"><button id="tab-login" class="on" type="button">Log in</button><button id="tab-signup" type="button">Join</button><i id="tab-ink"></i></div>
+    <h1 id="auth-title">Welcome back, explorer</h1>
+    <p id="auth-sub" class="muted">Log in with your username and password.</p>
     <form id="auth-form" autocomplete="on" novalidate>
-      <label class="fld"><span>Username</span><input id="f-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="20" placeholder="e.g. jaideep"></label>
-      <label class="fld su"><span>Display name</span><input id="f-name" autocomplete="nickname" maxlength="40" placeholder="Aapka naam (chat me dikhega)"></label>
-      <label class="fld"><span>Password</span><div class="pw"><input id="f-pass" name="password" type="password" autocomplete="current-password" maxlength="100" placeholder="Kam se kam 6 characters"><button type="button" id="pw-eye" class="icon-btn" aria-label="Show password"></button></div></label>
-      <label class="fld su"><span>Secret Key <em>(dono users ka same)</em></span><input id="f-secret" type="password" autocomplete="off" maxlength="100" placeholder="Shared secret key — kisi ko mat batana"></label>
-      <p class="hint su">🔒 Secret Key se messages aapke phone/browser me hi encrypt hote hain. Ye key server ko kabhi nahi bheji jaati. <b>Bhool gaye to messages wapas nahi aayenge.</b></p>
+      <label class="fld"><span>Username</span><input id="f-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="20" placeholder="e.g. nova"></label>
+      <label class="fld su"><span>Explorer name</span><input id="f-name" autocomplete="nickname" maxlength="40" placeholder="The name your companion sees"></label>
+      <label class="fld"><span>Password</span><div class="pw"><input id="f-pass" name="password" type="password" autocomplete="current-password" maxlength="100" placeholder="At least 6 characters"><button type="button" id="pw-eye" class="icon-btn" aria-label="Show password"></button></div></label>
+      <label class="fld su"><span>Galaxy Key <em>(the same for both explorers)</em></span><input id="f-secret" type="password" autocomplete="off" maxlength="100" placeholder="A shared key. Keep it to yourselves"></label>
+      <p class="hint su"><span id="hint-ic"></span><span>Your Galaxy Key never leaves this device and is never sent to the server. <b>If you forget it, nothing can be recovered.</b></span></p>
       <div id="auth-err" class="err hidden" role="alert"></div>
-      <button id="auth-submit" class="btn primary" type="submit"><span>Login</span><i class="spin"></i></button>
+      <button id="auth-submit" class="btn gold" type="submit"><span>Log in</span><i class="spin"></i></button>
     </form>
   </div>
-  <div class="auth-foot">🔒 Private &amp; end-to-end encrypted</div>
+  <div class="auth-foot"><span id="foot-ic"></span> Calm. Private. Yours.</div>
 </div>
 
-<!-- Secret key prompt -->
+<!-- Galaxy Key prompt -->
 <div id="keyscreen" class="screen hidden">
-  <div class="auth-band"></div>
-  <div class="auth-top"><img src="icons/logo.svg" alt="" width="34" height="34"><span>MyChat</span></div>
+  <div class="nebula" aria-hidden="true"></div>
+  <div class="auth-top"><img src="icons/logo.svg" alt="" width="34" height="34"><span>Galaxy Relax</span></div>
   <div class="auth-card">
     <div class="key-ic" id="key-ic"></div>
-    <h1>Secret Key daalo</h1>
-    <p class="muted">Is device par pehli baar login hua hai. Wahi <b>shared Secret Key</b> daalo jo aapne aur dusre user ne set ki thi.</p>
+    <h1>Enter your Galaxy Key</h1>
+    <p class="muted">This is the first time on this device. Enter the <b>shared Galaxy Key</b> you both chose when you joined.</p>
     <form id="key-form" novalidate>
-      <label class="fld"><span>Secret Key</span><input id="k-secret" type="password" autocomplete="off" maxlength="100" placeholder="Shared secret key"></label>
-      <label class="chk"><input id="k-remember" type="checkbox" checked><span>Is device par key yaad rakho (password se encrypted)</span></label>
+      <label class="fld"><span>Galaxy Key</span><input id="k-secret" type="password" autocomplete="off" maxlength="100" placeholder="Shared key"></label>
+      <label class="chk"><input id="k-remember" type="checkbox" checked><span>Remember it on this device (encrypted with your password)</span></label>
       <div id="key-err" class="err hidden" role="alert"></div>
-      <button id="key-submit" class="btn primary" type="submit"><span>Unlock chats</span><i class="spin"></i></button>
-      <button id="key-logout" class="btn ghost" type="button">Logout</button>
+      <button id="key-submit" class="btn gold" type="submit"><span>Continue</span><i class="spin"></i></button>
+      <button id="key-logout" class="btn ghost" type="button">Log out</button>
     </form>
   </div>
 </div>
 
-<!-- Connect error -->
+<!-- Connection problem -->
 <div id="neterr" class="screen hidden">
+  <div class="nebula" aria-hidden="true"></div>
   <div class="auth-card center">
     <div class="key-ic" id="neterr-ic"></div>
-    <h1>Connect nahi ho paya</h1>
-    <p class="muted" id="neterr-msg">Internet ya server check karo, phir dobara try karo.</p>
-    <button id="neterr-retry" class="btn primary" type="button"><span>Retry</span><i class="spin"></i></button>
+    <h1>Lost the signal</h1>
+    <p class="muted" id="neterr-msg">Check your internet connection and try again.</p>
+    <button id="neterr-retry" class="btn gold" type="button"><span>Try again</span><i class="spin"></i></button>
   </div>
 </div>
 
-<!-- Main app -->
+<!-- DECOY: the 3D night sky. The unlock box is the "Name your planet" input. -->
+<div id="decoy" class="hidden" aria-label="Galaxy Relax">
+  <canvas id="sky"></canvas>
+  <div class="dc-top">
+    <div><div class="dc-hi" id="dc-hi">Good evening</div><div class="dc-ttl">Your quiet sky</div></div>
+    <button id="dc-sleep" class="icon-btn" type="button" aria-label="Sleep"></button>
+  </div>
+  <div id="dc-star" class="dc-star" aria-hidden="true"></div>
+  <div class="dc-hint">Drag to turn &middot; Pinch to zoom</div>
+  <div class="dc-field"><div class="dc-pill">
+    <input id="dc-input" type="password" name="planet-name" placeholder="Name your planet..." aria-label="Name your planet" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" data-lpignore="true" data-1p-ignore="true" maxlength="64">
+    <button id="dc-go" class="dc-go" type="button" aria-label="Name planet"></button>
+  </div></div>
+  <div class="dc-warp" aria-hidden="true"></div>
+</div>
+
+<!-- Main app (private area; removed from the page while hidden) -->
 <div id="app" class="hidden">
-  <div id="conn-banner" class="conn-banner hidden">Connecting…</div>
+  <div id="conn-banner" class="conn-banner hidden">Reconnecting&hellip;</div>
 
   <aside id="sidebar">
     <header class="sb-head">
       <button id="btn-me" class="avatar-btn" aria-label="Profile"></button>
-      <div class="sb-title">MyChat</div>
+      <div class="sb-title">Chats</div>
       <div class="sb-actions">
-        <button id="btn-theme" class="icon-btn" aria-label="Toggle theme" title="Dark / Light"></button>
+        <button id="btn-theme" class="icon-btn" aria-label="Themes" title="Themes"></button>
         <button id="btn-starred" class="icon-btn" aria-label="Starred messages" title="Starred messages"></button>
         <button id="btn-menu" class="icon-btn" aria-label="Menu" title="Menu"></button>
       </div>
     </header>
     <div id="notif-banner" class="notif-banner hidden">
       <div class="nb-ic" id="nb-ic"></div>
-      <div class="nb-txt"><b>Notifications on karo</b><span>Naye messages ka alert pao</span></div>
+      <div class="nb-txt"><b>Turn on alerts</b><span>Get a quiet nudge when something new arrives</span></div>
       <button id="nb-on" class="btn small">Enable</button>
       <button id="nb-x" class="icon-btn" aria-label="Dismiss"></button>
     </div>
     <div class="sb-search">
-      <div class="search-box"><span class="ic" id="sb-search-ic"></span><input id="sb-search" placeholder="Search or start new chat" autocomplete="off" spellcheck="false"><button id="sb-search-clear" class="icon-btn hidden" aria-label="Clear"></button></div>
+      <div class="search-box"><span class="ic" id="sb-search-ic"></span><input id="sb-search" placeholder="Search" autocomplete="off" spellcheck="false"><button id="sb-search-clear" class="icon-btn hidden" aria-label="Clear"></button></div>
     </div>
     <div id="chat-list" class="chat-list"></div>
-    <div class="sb-foot"><span id="sb-lock"></span> Your personal messages are end-to-end encrypted</div>
+    <div class="sb-foot"><span id="sb-lock"></span> Your messages are end-to-end encrypted</div>
   </aside>
 
   <main id="main">
+    <div id="skin-bg" class="skin-bg" aria-hidden="true"></div>
     <section id="empty-state" class="empty-state">
       <img src="icons/logo.svg" alt="" width="96" height="96">
-      <h2>MyChat Web</h2>
-      <p>Private chat, sirf aap dono ke liye.<br>Messages, photos aur files aapke device par encrypt hote hain.</p>
+      <h2>Galaxy Relax</h2>
+      <p>Only the two of you can read what is here.<br>Messages, photos and files are encrypted on your device.</p>
       <div class="empty-lock"><span id="empty-lock"></span> End-to-end encrypted</div>
     </section>
 
     <section id="chat" class="chat hidden">
       <header class="ch-head">
+        <div class="hearts" aria-hidden="true"></div>
         <button id="btn-back" class="icon-btn back" aria-label="Back"></button>
         <button id="ch-info" class="ch-info" type="button">
           <div id="ch-avatar" class="avatar"></div>
           <div class="ch-text"><div id="ch-name" class="ch-name"></div><div id="ch-status" class="ch-status"></div></div>
         </button>
         <div class="ch-actions">
-          <button id="btn-search" class="icon-btn" aria-label="Search in chat" title="Search"></button>
+          <button id="btn-search" class="icon-btn" aria-label="Search in conversation" title="Search"></button>
           <button id="btn-chmenu" class="icon-btn" aria-label="Menu" title="Menu"></button>
         </div>
       </header>
 
       <div id="msg-search" class="msg-search hidden">
         <button id="ms-close" class="icon-btn" aria-label="Close search"></button>
-        <div class="search-box"><span class="ic" id="ms-ic"></span><input id="ms-input" placeholder="Search in this chat" autocomplete="off" spellcheck="false"></div>
+        <div class="search-box"><span class="ic" id="ms-ic"></span><input id="ms-input" placeholder="Search" autocomplete="off" spellcheck="false"></div>
         <span id="ms-count" class="ms-count"></span>
         <button id="ms-up" class="icon-btn" aria-label="Previous"></button>
         <button id="ms-down" class="icon-btn" aria-label="Next"></button>
@@ -128,7 +150,7 @@
       <div id="msgs-wrap" class="msgs-wrap">
         <div id="msgs" class="msgs" tabindex="-1"></div>
         <button id="scroll-down" class="scroll-down hidden" aria-label="Scroll to latest"><span id="sd-ic"></span><b id="sd-count" class="hidden"></b></button>
-        <div id="drop-hint" class="drop-hint hidden">Files yaha chhodo</div>
+        <div id="drop-hint" class="drop-hint hidden">Drop files here</div>
       </div>
 
       <div id="reply-bar" class="reply-bar hidden"></div>
@@ -146,7 +168,7 @@
           <button id="rec-cancel" class="icon-btn" aria-label="Cancel recording"></button>
           <div class="rec-dot"></div><div id="rec-time" class="rec-time">0:00</div>
           <div class="rec-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-          <button id="rec-send" class="send-btn" aria-label="Send voice message"></button>
+          <button id="rec-send" class="send-btn" aria-label="Send voice note"></button>
         </div>
         <div id="emoji-panel" class="emoji-panel"></div>
       </footer>
@@ -158,18 +180,23 @@
 <div id="overlay-root"></div>
 <div id="menu-root"></div>
 <div id="toast-root"></div>
+<canvas id="fx" aria-hidden="true"></canvas>
 <input id="file-img" type="file" accept="image/*" multiple hidden>
 <input id="file-cam" type="file" accept="image/*" capture="environment" hidden>
 <input id="file-doc" type="file" multiple hidden>
 
 <script src="js/config.js"></script>
+<script src="js/icons.js"></script>
 <script src="js/util.js"></script>
 <script src="js/crypto.js"></script>
 <script src="js/vendor/socket.io.min.js"></script>
 <script src="js/api.js"></script>
 <script src="js/emoji.js"></script>
+<script src="js/fx.js"></script>
 <script src="js/app.js"></script>
 <script src="js/chat.js"></script>
+<script src="js/stealth.js"></script>
 <script src="js/boot.js"></script>
+<script src="js/vendor/galaxy3d.js" async></script>
 </body>
 </html>

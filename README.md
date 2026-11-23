@@ -1,9 +1,9 @@
-# 💬 MyChat — Private End-to-End Encrypted Chat (2 users) — v2 (Realtime)
+# 🌌 Galaxy Relax (MyChat) — Private Encrypted Chat, chhupa hua ek 3D relax app ke peeche — v3
 
-WhatsApp-Web jaisa premium private chat app. Sirf **2 log** chat kar sakte hain. Messages, photos, files aur profile
-**aapke browser me hi encrypt** hote hain. Server ko sirf ciphertext milta hai.
+Bahar se ye ek shaant **3D relax app** hai (tairte hue planets, taare). Andar **sirf 2 log** ka private chat hai.
+Messages, photos, files aur profile **aapke browser me hi encrypt** hote hain. Server ko sirf ciphertext milta hai.
 
-v2 me polling hata di gayi: ab **WebSocket (Socket.io)** hai, to message ~**0.07 sec** me pahunchta hai (pehle 3–8 sec).
+Ek khufiya code type karne par asli chat khulta hai, aur app chhodte hi wapas planets dikhne lagte hain.
 
 🌐 **Live app:** https://veonreen.github.io/my-chat/
 🖥️ **Backend (VPS):** https://chat.srv1898582.hstgr.cloud
@@ -24,6 +24,42 @@ v2 me polling hata di gayi: ab **WebSocket (Socket.io)** hai, to message ~**0.07
 
 > ⚠️ **Secret Key bhool gaye to purane messages wapas nahi aa sakte.** Isko kahin safe likh lo
 > (par chat me mat daalo). Dono users ko ye key kisi aur raaste se (phone par, mil kar) batao.
+
+---
+
+## 🕶️ Stealth Mode (v3) — kaise kaam karta hai
+
+**Poora UI English me hai. Ye README Hinglish me hai.**
+
+| Step | Kya hota hai |
+|---|---|
+| 1. App kholo | Naam, icon, title, splash sab **Galaxy Relax**. Login screen par koi "chat" jaisa shabd nahi. |
+| 2. Login | Username + password (App Lock pehle jaisa). |
+| 3. Decoy screen | Khoobsurat **3D aasmaan**: 4 planets, taare, halki roshni. **Ungli se ghumao** (drag), **do ungli se zoom** (pinch), **planet par tap** karo to chhota effect. |
+| 4. Khufiya code | Neeche "Name your planet..." box asal me unlock box hai. Default code wahi hai jo aapne bataya tha. Wo yahan jaanbujh kar likha nahi, kyunki ye repo public hai. Poora type hote hi chat **turant** khul jata hai, **Send/Enter dabaye bina**. Box khali ho jata hai. |
+| 5. Galat text | Kuch nahi hota (sirf ek planet halka sa hilta hai). Koi error nahi. |
+| 6. Chat khula hai | Jab tak app chhodo nahi, sab dikhta aur chalta rehta hai. |
+| 7. Auto-hide | App band, tab/app badla, screen off, ya window blur => **turant** planets par wapas (chhoti animation ke saath). Recent-apps preview me bhi chat nahi dikhta. |
+| 8. Panic | **Phone hilao (shake)** ya **top bar / khali chat background par 3 second daba ke rakho** => turant planets. Message par chhota long-press (menu) pehle jaisa chalta hai. Menu me **"Back to the sky"** bhi hai. |
+
+### Code ke baare me
+- Code kabhi **bheja, save ya log nahi** hota. Sirf uska **salted PBKDF2 hash** (100,000 rounds) rakha jata hai.
+- Code **dono users ka same** hai. Settings → **Change secret code** (purana code poochta hai). Naya hash server par jata hai, to **dono phones apne aap naye code par aa jate hain** (server ko sirf hash aur code ki lambai pata hoti hai, code nahi).
+- Box ek **password-type** field hai (code dots me dikhta hai). Wajah: keyboard (Gboard) password fields yaad nahi rakhta, to aapka code kisi aur app me suggestion me nahi aayega.
+- Jab planets dikh rahe hain, **chat ka koi message page (DOM) me hota hi nahi**. Chat wala poora hissa page se hata diya jata hai (sirf CSS se chhupana nahi).
+
+### Notification
+- Text hamesha: **"🌟 A new star is shining"** (title: Galaxy Relax). Na naam, na message, na "chat" shabd. Server aur service worker dono yahi bhejte/dikhate hain.
+- Notification dabane par bas app aage aata hai. **Chat seedha nahi khulta**, code phir bhi type karna padta hai.
+- Planets wali screen par naya message aaye to ek **sunehri taara chamakta** hai (twinkle). Aap chat me ho to taara nahi dikhta.
+- Icon par unread number/badge kabhi nahi aata.
+
+### Mazedaar chat
+- Naya message **pop/bounce** ke saath aata hai, bhejte waqt **whoosh** sound.
+- Message par **double-tap** => ❤️ udta hai. Message par **long-press** => 😂 🔥 👍 😮 😢 ❤️ reactions (animation ke saath). Reactions bhi **encrypted** hain.
+- **Themes** (Settings ya upar palette button): Galaxy, Neon, Sunset, Ocean, sab animated.
+- **Word effects**: "happy birthday" => confetti, "love" => hearts ki baarish, "congrats" => fireworks. (Settings me band kar sakte ho.)
+- Typing bubble (teen uchalte dot), sound effects ka on/off toggle.
 
 ---
 
@@ -61,8 +97,10 @@ PC → internet → VPS (Traefik, HTTPS/WSS) → PC, 40 messages:
 | Emoji, links, search | Emoji panel, clickable links, sidebar + chat ke andar search |
 | **App Lock** | Tab/app band karke kholo, ya 1 minute se zyada background me raho => auto-lock, login screen. Menu → "Lock app" se manual lock. Unlock = username + password |
 | **Change password** | Settings → "Change password". Purana password server par verify hota hai, phir naya set. Is device ki vault naye password se re-encrypt hoti hai. Dusre devices ke session band ho jate hain |
-| Notifications | App khula ho to sound + notification. **App band ho to Web Push (VAPID)** |
-| Dark / Light | Upar 🌙 button, ya Settings me "System" |
+| Notifications | **App band ho to Web Push (VAPID)**. Text hamesha "A new star is shining", koi naam/message nahi |
+| Themes | Galaxy / Neon / Sunset / Ocean (animated), Settings ya palette button |
+| Stealth Mode | 3D decoy + khufiya code + auto-hide + panic. Upar "Stealth Mode" section dekho |
+| Reactions | Double-tap ❤️ ya long-press se 6 emoji, encrypted |
 | PWA | Install kar sakte ho, shell offline khulta hai |
 
 ---
@@ -134,7 +172,8 @@ my-chat/
 git add -A && git commit -m "change" && git push
 ```
 1-2 minute me GitHub Pages par live.
-**Naya version sab devices par bhejna ho to:** `docs/sw.js` me `CACHE = 'mychat-vN'` aur `docs/js/config.js` me `MYCHAT_VERSION` badlo. Service worker purana cache delete karke naya laata hai, aur har file `no-cache` se revalidate hoti hai, to GitHub Pages ka 10 min cache bhi purana nahi dikhata.
+**Naya version sab devices par bhejna ho to:** `docs/sw.js` me `CACHE = 'galaxy-vN'` aur `docs/js/config.js` me `MYCHAT_VERSION` badlo.
+**3D aasmaan badalna ho** to `tools/galaxy3d/galaxy.src.js` edit karo, phir `cd tools/galaxy3d && npm init -y && npm i three esbuild && node build.cjs` (ye `docs/js/vendor/galaxy3d.js` banata hai). Icons: Lucide (`docs/js/icons.js`). Fonts: Sora + Manrope (`docs/fonts/`, khud hi hosted, Google se kuch load nahi hota). Service worker purana cache delete karke naya laata hai, aur har file `no-cache` se revalidate hoti hai, to GitHub Pages ka 10 min cache bhi purana nahi dikhata.
 
 **Backend badalna hai** (`server/`):
 ```bash

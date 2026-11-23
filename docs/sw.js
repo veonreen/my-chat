@@ -1,8 +1,10 @@
-/* MyChat service worker: app shell cache (offline open) + notification click */
-const CACHE = 'mychat-v4';   // version badlo => purana cache delete hota hai aur naya app sab devices par aata hai
+/* Galaxy Relax service worker: app shell cache (opens offline) + the quiet "new star" alert. */
+const CACHE = 'galaxy-v5';   // change this with every release => old cache is deleted and both phones get the new version
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest',
-  'js/config.js', 'js/util.js', 'js/crypto.js', 'js/vendor/socket.io.min.js', 'js/api.js', 'js/emoji.js', 'js/app.js', 'js/chat.js', 'js/boot.js',
+  'js/config.js', 'js/icons.js', 'js/util.js', 'js/crypto.js', 'js/vendor/socket.io.min.js', 'js/api.js', 'js/emoji.js', 'js/fx.js',
+  'js/app.js', 'js/chat.js', 'js/stealth.js', 'js/boot.js', 'js/vendor/galaxy3d.js',
+  'fonts/sora.woff2', 'fonts/manrope.woff2',
   'icons/logo.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 
@@ -12,8 +14,8 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
-// Same-origin GET: network first (taaki update turant mile), fail ho to cache.
-// cache:'no-cache' => browser ka HTTP cache (GitHub Pages ~10 min) bhi revalidate hota hai, purani file kabhi nahi milti.
+// Same-origin GET: network first (updates arrive at once), cache when offline.
+// cache:'no-cache' makes the browser revalidate even GitHub Pages' ~10 minute HTTP cache.
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
@@ -24,26 +26,24 @@ self.addEventListener('fetch', (e) => {
     }).catch(() => caches.match(req, { ignoreSearch: true }).then((r) => r || caches.match('index.html')))
   );
 });
-// Web Push: server sirf "naya message" bhejta hai (E2EE: text server ko pata hi nahi).
-// App screen par dikh raha ho to notification nahi dikhate.
+
+// Web Push. Stealth: whatever the server sends, the alert text is ALWAYS the same. No sender, no message text, no "chat".
+// While the app is on screen (hash #u = logged in) nothing is shown: the decoy sky's star glows instead.
 self.addEventListener('push', (e) => {
-  let d = {};
-  try { d = e.data ? e.data.json() : {}; } catch (err) { d = {}; }
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-    // sirf tab dabao jab app UNLOCKED (url me #u) aur screen par dikh raha ho. Locked login screen par notification dikhao.
     if (list.some((c) => c.visibilityState === 'visible' && /#u$/.test(c.url))) return;
-    return self.registration.showNotification(d.title || 'MyChat', {
-      body: d.body || 'Naya message',
+    return self.registration.showNotification('Galaxy Relax', {
+      body: '🌟 A new star is shining',
       icon: 'icons/icon-192.png', badge: 'icons/icon-192.png',
-      tag: 'chat-' + (d.from || 'x'), renotify: true, data: { peer: d.from },
+      tag: 'star', renotify: true,
     });
   }));
 });
+// Tapping the alert only brings the app forward. It never opens the private area: you still type the secret code.
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const peer = e.notification.data && e.notification.data.peer;
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-    for (const c of list) { if ('focus' in c) { c.postMessage({ type: 'open-chat', peer }); return c.focus(); } }
-    return self.clients.openWindow(peer ? './?peer=' + encodeURIComponent(peer) : './');   // locked app login ke baad ye chat kholta hai
+    for (const c of list) { if ('focus' in c) return c.focus(); }
+    return self.clients.openWindow('./');
   }));
 });

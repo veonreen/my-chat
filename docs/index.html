@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Galaxy Relax</title>
 <meta name="description" content="Galaxy Relax - drift through a calm 3D sky">
-<meta name="theme-color" content="#FAF7F2">
+<meta name="theme-color" content="#FBF7F2">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -73,7 +73,7 @@
     <button id="dc-sleep" class="glass-btn" type="button" aria-label="Sleep"></button>
   </div>
   <div id="dc-star" class="dc-star" aria-hidden="true"></div>
-  <div class="dc-hint">Drag to turn &middot; Pinch to zoom</div>
+  <div class="dc-hint">Drag the sky &middot; spin a planet &middot; pinch to zoom</div>
   <div class="dc-field"><div class="dc-pill">
     <input id="dc-input" type="text" name="planet-name" placeholder="Name your planet..." aria-label="Name your planet" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" inputmode="text" data-lpignore="true" data-1p-ignore="true" data-form-type="other" maxlength="64">
     <button id="dc-go" class="dc-go" type="button" aria-label="Name planet"></button>
@@ -89,13 +89,13 @@
   <!-- desktop: slim icon rail (replaces the usual list pane) -->
   <nav id="rail" class="rail" aria-label="Menu">
     <div class="rail-logo"><span id="rail-logo-ic"></span></div>
-    <button id="rail-chat" class="rail-btn on" aria-label="Conversation" title="Conversation"></button>
-    <button id="rail-sky" class="rail-btn" aria-label="Back to the sky" title="Back to the sky"></button>
-    <button id="rail-theme" class="rail-btn" aria-label="Appearance" title="Appearance"></button>
-    <button id="rail-star" class="rail-btn" aria-label="Starred messages" title="Starred messages"></button>
+    <button id="rail-chat" class="rail-btn on" aria-label="Conversation" data-tip="Conversation"><span class="ri"></span><span class="rl">Chat</span></button>
+    <button id="rail-sky" class="rail-btn" aria-label="Back to the sky" data-tip="Back to the sky"><span class="ri"></span><span class="rl">Sky</span></button>
+    <button id="rail-theme" class="rail-btn" aria-label="Appearance" data-tip="Appearance"><span class="ri"></span><span class="rl">Theme</span></button>
+    <button id="rail-star" class="rail-btn" aria-label="Starred messages" data-tip="Starred messages"><span class="ri"></span><span class="rl">Starred</span></button>
     <span class="rail-sp"></span>
-    <button id="rail-settings" class="rail-btn" aria-label="Settings" title="Settings"></button>
-    <button id="rail-me" class="rail-me" aria-label="Profile" title="Profile"></button>
+    <button id="rail-settings" class="rail-btn" aria-label="Settings" data-tip="Settings"><span class="ri"></span><span class="rl">Settings</span></button>
+    <button id="rail-me" class="rail-me" aria-label="Profile" data-tip="Profile"></button>
   </nav>
 
   <aside id="sidebar">
@@ -152,7 +152,7 @@
 
       <div id="msgs-wrap" class="msgs-wrap">
         <div id="msgs" class="msgs" tabindex="-1"></div>
-        <button id="scroll-down" class="scroll-down hidden" aria-label="Scroll to latest"><span id="sd-ic"></span><b id="sd-count" class="hidden"></b></button>
+        <button id="scroll-down" class="scroll-down" aria-label="Jump to latest"><span id="sd-ic"></span><b id="sd-count" class="hidden"></b></button>
         <div id="drop-hint" class="drop-hint hidden">Drop files here</div>
       </div>
 

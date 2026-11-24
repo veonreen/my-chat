@@ -17,7 +17,7 @@ const KS = 'a1'.repeat(16), KS2 = 'b2'.repeat(16);
 
 (async () => {
   const srv = spawn(process.execPath, ['server.js'], { env: { ...process.env, PORT, DATA_DIR: data }, stdio: ['ignore', 'inherit', 'inherit'] });
-  await sleep(1800);
+  await sleep(4000);
 
   console.log('\n[key material]');
   const A = await post({ action: 'signup', username: 'alice', password: hex('a') });
@@ -87,7 +87,7 @@ const KS = 'a1'.repeat(16), KS2 = 'b2'.repeat(16);
   t('accounts keep their password hash, profile text cleared', users.length === 2 && users.every((u) => u.hash && u.nameEnc === ''));
   t('no file blobs left', fs.readdirSync(path.join(data, 'files')).length === 0);
   const srv2 = spawn(process.execPath, ['server.js'], { env: { ...process.env, PORT, DATA_DIR: data }, stdio: ['ignore', 'inherit', 'inherit'] });
-  await sleep(1800);
+  await sleep(4000);
   const again = await post({ action: 'login', username: 'alice', password: hex('a') });
   t('after the wipe: the same password still logs in and gets the new key info', again.ok && again.kver === 1 && again.ksalt === KS3 && again.kc === 'CHECK-3', again);
   srv2.kill();

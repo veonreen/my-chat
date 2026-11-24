@@ -15,7 +15,7 @@ const rpc = (s, action, d = {}) => new Promise((r) => s.emit('rpc', { action, ..
 (async () => {
   const srv = spawn(process.execPath, ['server.js'], { env: { ...process.env, PORT, DATA_DIR: data }, stdio: ['ignore', 'pipe', 'pipe'] });
   srv.stderr.on('data', (d) => process.stderr.write(d));
-  await sleep(1500);
+  await sleep(4000);
 
   const A = await post({ action: 'signup', username: 'alice', password: hex('a'), proof: hex('1'), ksalt: 's', kc: 'k' });
   const B = await post({ action: 'signup', username: 'bob', password: hex('b'), proof: hex('1') });

@@ -1,4 +1,4 @@
-# 🌌 Galaxy Relax (MyChat) — Private Encrypted Chat, ek 3D relax app ke peeche chhupa hua — v4
+# 🌌 Galaxy Relax (MyChat) — Private Encrypted Chat, ek 3D relax app ke peeche chhupa hua — v5
 
 Bahar se ye ek shaant **3D relax app** hai (tairte hue planets, baadal ya raat ka aasmaan). Andar **sirf 2 log** ka private chat hai.
 Messages, photos, files aur profile **aapke browser me hi encrypt** hote hain. Server ko sirf ciphertext milta hai.
@@ -17,6 +17,7 @@ Ek khufiya **unlock code** type karne par asli chat khulta hai, aur app chhodte 
 
 1. Dono users app kholo: https://veonreen.github.io/my-chat/ (Chrome me menu → **Add to Home screen** se install karo).
 2. **Log in** karo (username + password). Naya user ho to **Join** dabao (username, naam, password). **Ab koi Secret Key nahi hai.**
+   **v5:** login **din mein sirf 1 baar** hota hai. Raat **12 baje (midnight IST)** tak login chalta hai, uske baad dobara login. Baaki time app **seedha planet screen (aasmaan)** par khulta hai, bas code type karo.
 3. Aasmaan dikhega. Neeche **"Name your planet..."** box asal me unlock box hai. **Unlock code** wahan type karo, chat turant khul jayega (Send/Enter nahi dabana).
 4. Settings → **Notifications** on karo. App band hone par bhi "🌟 A new star is shining" aayega.
 
@@ -35,7 +36,7 @@ Ek khufiya **unlock code** type karne par asli chat khulta hai, aur app chhodte 
 | 5. Galat text | Kuch nahi hota (na error, na awaaz). |
 | 6. Chat khula hai | Jab tak app chhodo nahi, sab chalta rehta hai. |
 | 7. Auto-hide | App band, tab/app badla, screen off, window blur => **turant** aasmaan par wapas. |
-| 8. Panic | **Phone hilao (shake)** ya **header / khali chat background par 3 second daba ke rakho** => turant aasmaan. Message par chhota long-press (menu) pehle jaisa chalta hai. Menu me **"Back to the sky"** bhi hai. |
+| 8. Panic | **Phone hilao (shake)** ya **header / khali chat background par 3 second daba ke rakho** => turant aasmaan. Message par chhota long-press (menu) pehle jaisa chalta hai. Menu me **"Back to the sky"** bhi hai. **v5:** phone par ye hold ab touch events se chalta hai, daba ke rakhne par ek **progress ring** bharta dikhta hai, aur ungli thodi hilne se hold nahi tootta (bahut door khiski to cancel). |
 
 - Jab aasmaan dikh raha hai, **chat ka koi message page (DOM) me hota hi nahi**. Poora chat wala hissa page se hata diya jata hai.
 - Notification dabane par bas app aage aata hai. **Chat seedha nahi khulta**, code phir bhi type karna padta hai.
@@ -47,6 +48,14 @@ Ek khufiya **unlock code** type karne par asli chat khulta hai, aur app chhodte 
 - **Dark**: "Black & Gold". Gehra kaala, gold bahut kam. Raat ka asli aasmaan (halki Milky Way, hazaaron taare). Glass bubbles par halka gold kinara.
 - **Auto**: **6 AM se 7 PM Light**, raat ko Dark.
 - Desktop par apna layout: **side rail + ek bada conversation card + profile card** (list pane nahi, kyunki baat sirf ek insaan se hai).
+
+### v5 me naya
+- **Aasmaan (approved animation):** 4 asli planets (chhalle wala gas giant, samundar wala planet + chaand, craters wala patthar, barfeela chhota planet), door ke dhundhle planets, taare, shooting stars. **60 fps target**: phone slow ho to resolution aur effects **apne aap** halke ho jate hain, jagah milte hi wapas badh jate hain. **Phone tilt karo** to aasmaan halka sa ghoomta hai (parallax).
+- **Ivory Rose Luxury** default theme (Light) aur gehra Dark theme. Dono me text aur bubbles ka contrast badhaya gaya hai.
+- **Composer upar:** message box thoda upar uthaya, neeche ki patli line aur typing ke time ki outline hata di.
+- **Jump to latest:** purane messages padhte waqt neeche ek chhota ⬇ button aata hai, dabate hi latest par chala jata hai.
+- **Right panel (desktop):** photos na hon to "No shared photos yet".
+- **30 minute auto-clear (sirf device se):** jo message **seen** ho chuka hai, wo seen hone ke **30 minute baad** is phone ki screen aur memory se hat jata hai. Unseen message kabhi nahi hatta. **Server par sab safe rehta hai**, code dobara type karte hi sab wapas aa jata hai (naye 30 minute ke saath).
 
 ### Mazedaar chat
 - Naya message **pop/bounce** ke saath, bhejte waqt **whoosh** sound.
@@ -76,9 +85,9 @@ Ek khufiya **unlock code** type karne par asli chat khulta hai, aur app chhodte 
 - Dusre phone ko turant pata chal jata hai, wo **lock ho jata hai** aur naya code poochta hai (wo code aap dono ko khud ek doosre ko batana hai).
 
 **App Lock**
-- **Session token sirf memory me** (localStorage/IndexedDB me nahi). Tab/app band => login dobara.
-- App 1 minute se zyada background me raha => lock (page reload), login screen.
-- **Lock != Logout.** Lock par push subscription bachi rehti hai. **Logout** par sab local data aur push subscription hat jati hai.
+- **v5: Din ka login.** Session **raat 12 baje (IST) tak** chalta hai. Token device par rehta hai, par ek **non-extractable key** se seal hokar (koi use nikaal ke copy nahi kar sakta). Isliye din me app seedha aasmaan par khulta hai. **Unlock code / encryption key ab bhi sirf memory me** rehti hai, kabhi save nahi hoti.
+- App background me jaye / screen off ho => chat turant chhup jata hai (aasmaan), key memory se hat jati hai. Wapas aane par bas code type karo, login nahi.
+- **Logout** (ya midnight ke baad) par sab local data, saved session aur push subscription hat jati hai.
 - Server **har request par session dobara check** karta hai (socket par bhi). Password badalne par dusre devices ke session turant band.
 - Signup par ab koi key nahi poochi jati, isliye teesra insaan tabhi signup kar sakta hai jab 2 se kam users hon. Abhi dono accounts ban chuke hain (`MAX_USERS = 2`), to signup band hai.
 
@@ -95,7 +104,7 @@ Ek khufiya **unlock code** type karne par asli chat khulta hai, aur app chhodte 
 
 | Feature | Kaise kaam karta hai |
 |---|---|
-| Login / Join | Username + password. Password browser me PBKDF2 se stretch, server par **scrypt** hash. Session 30 din. Max **2 users**. |
+| Login / Join | Username + password. Password browser me PBKDF2 se stretch, server par **scrypt** hash. Session agli midnight (IST) tak. Max **2 users**. |
 | Realtime | WebSocket (Socket.io): message / tick / typing / online turant. Net toote to reconnect + catch-up. |
 | Ticks | ✓ sent, ✓✓ delivered, ✓✓ (rang) dekha |
 | Header | Naam normal case me, "online" ya "last seen today at 7:34 am" |
@@ -132,7 +141,7 @@ my-chat/
 │  └─ js/  config icons util crypto api emoji fx app chat stealth boot kdf-worker   vendor/ (socket.io, argon2, galaxy3d)
 ├─ server/                ← Backend (VPS par Docker me)
 │  ├─ server.js, backup.js, backup.sh, Dockerfile, docker-compose.yml
-│  ├─ test/ (e2e, push, chpw, react, rekey)   tools/ (decrypt-backup.mjs, fresh-start.js)
+│  ├─ test/ (e2e, push, chpw, react, rekey, session)   tools/ (decrypt-backup.mjs, fresh-start.js)
 ├─ tools/galaxy3d/        ← 3D aasmaan ka source + build script
 ├─ backend/               ← PURANA Apps Script backend (reference)
 └─ README.md
@@ -184,6 +193,12 @@ node test/react.js   # 15: reactions, purani DB ka migration, push text
 node test/rekey.js   # 30: key material, dump/rekey (atomic), stale, fresh-start tool
 node test/chpw.js    # 17: password change, session revocation, lockout
 node test/push.js    # 9: Web Push
+node test/session.js # 8: v5 login midnight IST par khatam
+```
+
+**UI test (headless Chrome, 2 phones, local server; live ko nahi chhuta):** `tools/ui-test/ui5.cjs` (27 checks: sky, unlock, 30-min clear, jump button, 3-sec hold + ring, tilt, themes, desktop). Chalane ke liye `puppeteer-core` chahiye:
+```bash
+TEST_NODE_MODULES=<puppeteer-core wala folder> node tools/ui-test/ui5.cjs
 ```
 
 ---
@@ -197,8 +212,9 @@ node test/push.js    # 9: Web Push
 | Code type karne par kuch nahi hota | Galat code, ya pehli baar ~0.5 sec lagta hai. Ek hi session me dobara turant khulta hai |
 | Chat me "Could not be decrypted" | Us phone par purana code/key chal rahi hai. Lock karo, login karo, naya code type karo |
 | Dusre phone ne code badla | Aapka phone lock ho jata hai. Login karke **naya code** type karo (dusre se pucho) |
-| Har baar login screen | App Lock hai, jaanbujh kar (band karne ya 1 minute background par) |
-| Dono phones par purana version | Settings ke neeche "Galaxy Relax v..." (abhi 4.0.0). App band karke kholo |
+| Login screen aa gaya | v5 me login raat 12 baje (IST) khatam hota hai. Din me ek baar login karo, baaki din seedha aasmaan |
+| Purane messages screen se gayab | 30 minute auto-clear (seen ke baad). Server par safe hain, code dobara type karo |
+| Dono phones par purana version | Settings ke neeche "Galaxy Relax v..." (abhi 5.0.0). App band karke kholo |
 | App band hone par notification nahi | Settings → Notifications on? iPhone par pehle "Add to Home Screen" |
 | "This galaxy already has two explorers" | Limit 2 users (`MAX_USERS` in `server/server.js`) |
 

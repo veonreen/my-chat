@@ -35,7 +35,7 @@ const waitEv = (s, ev, pred = () => true, ms = 3000) => new Promise((res) => {
   old.close();
 
   const srv = spawn(process.execPath, ['server.js'], { env: { ...process.env, PORT, DATA_DIR: data }, stdio: ['ignore', 'inherit', 'inherit'] });
-  await sleep(1500);
+  await sleep(4000);
 
   console.log('\n[migration]');
   const chk = new Database(path.join(data, 'mychat.db'), { readonly: true });

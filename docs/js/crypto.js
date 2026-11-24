@@ -111,11 +111,41 @@
     try { return (await decStr(key, kc, 'kc')) === KC_TEXT; } catch (e) { return false; }
   }
 
+  // ---------- day session: the login lasts until midnight (IST) and is kept on this device, encrypted ----------
+  // The token is sealed with an AES key that was generated here and can never be exported (non-extractable, kept in IndexedDB),
+  // so copying the stored bytes elsewhere reveals nothing. It does NOT hold the unlock code: that is typed again after every
+  // reload, so the chat itself stays closed even if somebody opens the app on an unlocked phone.
+  const DAY_DB = 'mychat-day';
+  const dbOpen = () => new Promise((res, rej) => { const r = indexedDB.open(DAY_DB, 1); r.onupgradeneeded = () => r.result.createObjectStore('k'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  async function dbRun(mode, fn) {
+    const db = await dbOpen();
+    try { return await new Promise((res, rej) => { const tx = db.transaction('k', mode); const out = fn(tx.objectStore('k')); tx.oncomplete = () => res(out && out.result); tx.onerror = tx.onabort = () => rej(tx.error); }); }
+    finally { db.close(); }
+  }
+  async function saveSession(obj) {
+    try {
+      let key = await dbRun('readonly', (s) => s.get('wk'));
+      if (!key) { key = await subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']); await dbRun('readwrite', (s) => s.put(key, 'wk')); }
+      const ct = await encBytes(key, enc.encode(JSON.stringify(obj)), 'day');
+      await dbRun('readwrite', (s) => s.put(ct, 's'));
+      return true;
+    } catch (e) { return false; }                 // no IndexedDB (private window): the app simply asks for the login each time
+  }
+  async function loadSession() {
+    try {
+      const key = await dbRun('readonly', (s) => s.get('wk')), ct = await dbRun('readonly', (s) => s.get('s'));
+      if (!key || !ct) return null;
+      return JSON.parse(dec.decode(await decBytes(key, ct, 'day')));
+    } catch (e) { return null; }
+  }
+  async function clearSession() { try { await dbRun('readwrite', (s) => s.clear()); } catch (e) { /* ignore */ } }
+
   /** Logout: remove everything this app stored on the device (only 'mychat.*' keys: github.io is shared with other projects). */
   async function wipeLocal() {
     for (const st of [localStorage, sessionStorage]) {
       try { Object.keys(st).filter((k) => k.indexOf('mychat.') === 0).forEach((k) => st.removeItem(k)); } catch (e) { /* ignore */ }
     }
+    await clearSession();
     try {
       await new Promise((res) => { const r = indexedDB.deleteDatabase('mychat'); r.onsuccess = r.onerror = r.onblocked = () => res(); setTimeout(res, 1500); });
     } catch (e) { /* ignore */ }
@@ -136,5 +166,5 @@
     try { indexedDB.deleteDatabase('mychat'); } catch (e) { /* ignore */ }
   }
 
-  MC.cr = { b64e, b64d, pwHash, deriveKey, randKsalt, makeVerifier, checkVerifier, encBytes, decBytes, encStr, decStr, makeKc, verifyKc, wipeLocal, purgeLegacy };
+  MC.cr = { b64e, b64d, pwHash, deriveKey, randKsalt, makeVerifier, checkVerifier, encBytes, decBytes, encStr, decStr, makeKc, verifyKc, wipeLocal, purgeLegacy, saveSession, loadSession, clearSession };
 })();

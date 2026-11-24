@@ -18,6 +18,7 @@
     since: 0, pv: '', peers: {}, more: {}, running: false, vapid: '', pushOn: false,
     settings: Object.assign({ theme: 'light', sound: true, notif: true, effects: true, shake: true }, LS.get('mychat.settings', {})),
     replyTo: null, editing: null, drafts: {}, searchQ: '', typingAt: 0,
+    exp: 0, cleared: new Set(), dirty: false, hidden: {},
   });
 
   const EDIT_WINDOW = 15 * 60 * 1000;
@@ -26,7 +27,7 @@
   // ================= Theme: Light (default), Dark, Auto =================
   // Auto = Light from 6 AM to 7 PM, Dark at night.
   const THEMES = ['light', 'dark', 'auto'];
-  const THEME_BAR = { light: '#FAF7F2', dark: '#0A0A0C' };
+  const THEME_BAR = { light: '#FBF7F2', dark: '#0A0A0C' };
   const resolvedTheme = () => {
     const t = THEMES.includes(S.settings.theme) ? S.settings.theme : 'light';
     if (t !== 'auto') return t;
@@ -126,6 +127,7 @@
   async function mergeMsgs(list, live) {
     const added = [], reacted = [];
     await Promise.all(list.map(async (sm) => {
+      if (S.cleared.has(sm.id)) return;               // cleared from this device (still safe on the server)
       let m = S.byId.get(sm.id);
       const isNew = !m;
       if (!m) { m = {}; S.byId.set(sm.id, m); }
@@ -155,16 +157,25 @@
   }
 
   // ================= Login + unlock =================
-  // - The login session token lives only in memory (api.token): closing the app = log in again.
+  // - The login lasts until midnight (IST). The session token is kept on this device, sealed with a non-extractable key
+  //   (see crypto.js), so the rest of the day the app opens straight onto the sky.
   // - There is NO stored key at all. The unlock code typed in the night sky is stretched with Argon2id into the AES key,
   //   and that key lives only in memory (S.key). Lock, reload and logout forget it.
-  const LOCK_AFTER_MS = 60 * 1000;
+  let dayTimer = 0;
+  function dayEndTimer() {
+    clearTimeout(dayTimer);
+    if (!S.exp) return;
+    const ms = S.exp - Date.now();
+    if (ms <= 0) return forceLogout('A new day has started. Please log in again.');
+    dayTimer = setTimeout(dayEndTimer, Math.min(ms + 500, 2147000000));
+  }
 
   function afterAuth(r) {
     api.token = r.token;
-    S.uid = r.uid; S.ksalt = r.ksalt || ''; S.kc = r.kc || ''; S.kver = r.kver || 0;
+    S.uid = r.uid; S.ksalt = r.ksalt || ''; S.kc = r.kc || ''; S.kver = r.kver || 0; S.exp = r.exp || 0;
     S.me = { uid: r.uid, username: r.me.username, name: r.me.username, about: '', photo: '' };
     S.key = null; S.verifier = null;
+    if (r.exp) C.saveSession({ token: r.token, exp: r.exp, uid: r.uid, username: r.me.username });
     return 'ok';
   }
   async function login(username, password) {
@@ -210,26 +221,42 @@
   }
   const verifyCode = async (code) => (S.key && S.verifier ? C.checkVerifier(S.verifier, code) : (await tryUnlock(code)) === 'ok');
 
-  /** Only for the "Retry" button after a network error: if we are already logged in (in memory), carry on. */
-  async function restore() { return api.token && S.uid ? 'ok' : 'none'; }
+  /** Start of every page load: is there a login for today on this device? -> 'ok' | 'expired' | 'none' */
+  async function restore() {
+    if (api.token && S.uid) return 'ok';                 // "Try again" after a network error
+    const rec = await C.loadSession();
+    if (!rec || !rec.token) return 'none';
+    if (!rec.exp || rec.exp <= Date.now() + 1000) { await C.clearSession(); return 'expired'; }
+    api.token = rec.token; S.uid = rec.uid; S.exp = rec.exp;
+    S.me = { uid: rec.uid, username: rec.username, name: rec.username, about: '', photo: '' };
+    S.key = null; S.verifier = null;
+    return 'ok';
+  }
 
   const flash = (msg) => { try { if (msg) sessionStorage.setItem('mychat.flash', msg); } catch (e) { /* ignore */ } };
   let locking = false;
-  /** App lock: memory saaf (reload), server par session invalid par push subscription RAHEGI => notifications chalte rahenge. */
-  function lock(msg, opts) {
+  /** Lock: forget the key and everything decrypted (a reload empties the memory). The day login stays, so the app comes back
+   *  on the sky and asks for the unlock code again. */
+  function lock(msg) {
     if (locking) return; locking = true;
-    S.running = false;
-    if (api.token && !(opts && opts.skipServer)) api.beacon('logout', { keepPush: true });
+    S.running = false; clearTimeout(dayTimer);
     api.disconnect(); api.token = null; S.key = null; S.verifier = null;
-    flash(msg || 'Locked. Log in to continue.');
+    flash(msg);
     location.reload();
   }
-  const lockNow = () => lock('Locked. Log in to continue.');
-  const forceLogout = (msg) => lock(msg || 'Your session has ended. Please log in again.', { skipServer: true });
+  const lockNow = () => lock('');
+  /** The login itself is over (new day, password changed elsewhere, server says no): forget it and ask for the login again. */
+  function forceLogout(msg) {
+    if (locking) return; locking = true;
+    S.running = false; clearTimeout(dayTimer);
+    C.clearSession().finally(() => { api.disconnect(); api.token = null; S.key = null; S.verifier = null; flash(msg || 'Your session has ended. Please log in again.'); location.reload(); });
+  }
+  /** Same login, but the key is no longer valid (the unlock code was changed on the other phone). */
+  const relock = (msg) => lock(msg);
 
   /** Full logout: push off, server session deleted, key + all local data wiped. */
   async function logout() {
-    S.running = false;
+    S.running = false; clearTimeout(dayTimer);
     try { await dropPush(); } catch (e) { /* ignore */ }
     try { await api.call('logout', {}, { timeout: 6000 }); } catch (e) { /* ignore */ }
     api.disconnect(); api.token = null; S.key = null; S.verifier = null;
@@ -299,22 +326,67 @@
     throw new api.ApiError('stale', 'Messages kept arriving while re-encrypting. Please try again.');
   }
 
-  // ---- Auto-lock: background 1 min+ / sleep / app band ----
-  let hiddenAt = 0, lockTimer = null, lastTick = Date.now();
-  const LOCK_MSG = 'Locked after a minute away. Log in to continue.';
-  function checkLock() { if (S.running && hiddenAt && Date.now() - hiddenAt >= LOCK_AFTER_MS) lock(LOCK_MSG); }
+  // ---- Leaving the app: the private area hides itself (stealth.js); here only the blur for the app switcher, and the day check ----
   document.addEventListener('visibilitychange', () => {
-    clearTimeout(lockTimer);
-    document.body.classList.toggle('privacy', document.hidden);          // app-switcher me chat blur
-    if (document.hidden) { hiddenAt = Date.now(); lockTimer = setTimeout(checkLock, LOCK_AFTER_MS + 300); }
-    else { checkLock(); hiddenAt = 0; }
+    document.body.classList.toggle('privacy', document.hidden);
+    if (!document.hidden && S.exp && Date.now() >= S.exp) forceLogout('A new day has started. Please log in again.');
   });
-  window.addEventListener('pageshow', (e) => { if (e.persisted) checkLock(); });
-  setInterval(() => {                                                    // laptop sleep / frozen tab detect
-    const n = Date.now();
-    if (S.running && n - lastTick > LOCK_AFTER_MS + 5000) lock(LOCK_MSG);
-    lastTick = n;
-  }, 5000);
+
+  // ================= 30-minute clearing (this device only) =================
+  // A message that has been SEEN is removed from this phone 30 minutes later: mine count from when the other person saw it (blue
+  // tick, server sAt), theirs from when I saw it. Unseen messages never clear. "Removed" means gone from the screen and from
+  // memory (decrypted text, thumbnails, picture URLs, audio); the server keeps everything, and typing the unlock code again
+  // brings it all back with a fresh 30 minutes.
+  const CLEAR_MS = 30 * 60 * 1000;
+  const expiryOf = (m) => {
+    if (m.status !== 2 || m.pending || m.failed || m.uploading) return 0;
+    const base = Math.max(m.sAt || 0, m._shown || 0);
+    return base ? base + CLEAR_MS : 0;
+  };
+  function freeMsg(m) {
+    if (m._blob) { try { URL.revokeObjectURL(m._blob); } catch (e) { /* ignore */ } m._blob = null; }
+    if (m._audio) { try { m._audio.pause(); } catch (e) { /* ignore */ } m._audio = null; }
+    if (m.fileId && fileCache.has(m.fileId)) {
+      const p = fileCache.get(m.fileId); fileCache.delete(m.fileId);
+      p.then((url) => { try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ } }).catch(() => {});
+    }
+    m.t = ''; m.rp = null; m.f = null; m._pl = ''; m.rx = {}; m._rawReacts = null;
+  }
+  function dropMsg(m) {
+    S.cleared.add(m.id); S.byId.delete(m.id);
+    const a = S.msgs.get(peerOf(m)); if (a) { const i = a.indexOf(m); if (i >= 0) a.splice(i, 1); }
+    freeMsg(m);
+    if (MC.ui && MC.ui.forget) MC.ui.forget(m.id);
+  }
+  let purging = false, purgeT = 0;
+  async function purgeExpired() {
+    if (!S.running || purging || document.querySelector('.lightbox')) return;
+    const now = Date.now(), gone = [];
+    for (const m of S.byId.values()) { const e = expiryOf(m); if (e && now >= e) gone.push(m); }
+    if (!gone.length) return;
+    purging = true;
+    try {
+      if (MC.ui && MC.ui.ready && MC.ui.vanish) await MC.ui.vanish(gone.map((m) => m.id));
+      for (const m of gone) { const peer = peerOf(m); S.more[peer] = false; S.hidden[peer] = true; dropMsg(m); }
+      S.dirty = true;
+      refreshUI();
+    } finally { purging = false; }
+  }
+  /** The unlock code was just typed (or re-typed): bring back what was cleared, and start a fresh 30 minutes for everything shown. */
+  async function freshStart() {
+    if (S.dirty) {
+      try {
+        S.cleared.clear();
+        const r = await api.call('sync', {}, { timeout: 40000 });
+        await mergeMsgs(r.msgs);
+        S.since = Math.max(S.since, r.maxUpd || 0);
+        for (const p of S.users.keys()) if (p !== S.uid) S.more[p] = (S.msgs.get(p) || []).length >= 1;
+        S.hidden = {}; S.dirty = false;
+      } catch (e) { /* offline: show what is here; the next unlock tries again */ }
+    }
+    const now = Date.now();
+    for (const m of S.byId.values()) m._shown = now;
+  }
 
   // ================= Sync & realtime (Socket.io) =================
   // Ab polling nahi: server naya message / tick / typing / online turant PUSH karta hai.
@@ -323,7 +395,7 @@
     S.pv = r.pv; S.peers = r.peers || {}; S.vapid = r.vapid || S.vapid;
     S.ksalt = r.ksalt || S.ksalt; S.kc = r.kc || S.kc; S.kver = r.kver || S.kver;
     await setUsers(r.users);
-    S.msgs.clear(); S.byId.clear();
+    S.msgs.clear(); S.byId.clear(); S.cleared.clear(); S.dirty = false; S.hidden = {};
     await mergeMsgs(r.msgs);
     S.since = r.maxUpd || 0;
     for (const p of S.users.keys()) if (p !== S.uid) S.more[p] = (S.msgs.get(p) || []).length >= 1;
@@ -385,7 +457,7 @@
     // the other phone changed the unlock code: our key is no longer valid, so lock and ask for the new code
     api.on('keyinfo', (d) => {
       if (!d || rekeying) return;
-      if (S.key && d.kver !== S.kver) return forceLogout('The secret code was changed. Log in and type the new code.');
+      if (S.key && d.kver !== S.kver) return relock('The unlock code was changed on the other phone. Type the new code.');
       S.ksalt = d.ksalt; S.kc = d.kc; S.kver = d.kver;
     });
     api.on('peers', (d) => { if (!S.running) return; S.peers = mergePeers(d); if (MC.ui) { MC.ui.updateStatus(); MC.ui.presenceChanged(); } });
@@ -733,6 +805,8 @@
     await api.connect();            // WebSocket (token galat ho to ApiError 'auth')
     await fullSync();
     S.running = true;
+    dayEndTimer();
+    if (!purgeT) purgeT = setInterval(purgeExpired, 10000);
     MC.stealth.begin();               // the decoy sky comes first; the private area opens only with the secret code
     try { history.replaceState(history.state, '', location.pathname + location.search + '#u'); } catch (e) { /* ignore */ }   // SW ko pata chale: app unlocked
     MC.ui.setConn(true);
@@ -750,7 +824,7 @@
 
   MC.core = {
     applyTheme, setTheme, saveSettings, resolvedTheme, THEMES, sendVis, react, isVisible, codeLen, tryUnlock, verifyCode, changeCode, keyReady: () => !!S.key,
-    login, signup, restore, logout, forceLogout, lockNow, changePassword, startApp, afterAuth,
+    login, signup, restore, logout, forceLogout, lockNow, changePassword, startApp, afterAuth, freshStart, purgeExpired,
     sendText, sendFiles, recStart, recStop, retry, editMsg, deleteMsg, starMsg, loadOlder, saveProfile,
     getFileUrl, downloadFile, preview, unreadCount, totalUnread, lastMsg, canEdit, nameOf, peerOf, lock,
     clearReply, clearEdit, markTyping, pollNow, askNotif, setupPush, dropPush, refreshUI, isActive, updateTitle, mergeMsgs,

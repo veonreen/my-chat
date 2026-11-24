@@ -1,6 +1,6 @@
 'use strict';
 /**
- * Galaxy Relax (MyChat) v4 — realtime backend (Express + Socket.io + SQLite)
+ * Galaxy Relax (MyChat) v5 — realtime backend (Express + Socket.io + SQLite)
  * ------------------------------------------------------------
  * - Server SIRF ciphertext dekhta hai. Secret Key / AES key kabhi yahan nahi aati.
  * - Actions purane Apps Script backend jaise hi hain (send, edit, del, history ...),
@@ -23,7 +23,9 @@ const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://veonreen.github.io').split(',').map((s) => s.trim()).filter(Boolean);
 const MAX_USERS = Number(process.env.MAX_USERS) || 2;
-const SESSION_MS = 30 * 86400000;
+// v5: a login lasts until the next midnight in India (IST = UTC+5:30), then the person logs in again.
+const IST_MS = 5.5 * 3600000;
+const sessionEnd = (now) => Math.floor((now + IST_MS) / 86400000) * 86400000 + 86400000 - IST_MS;
 const MAX_SESSIONS = 5;                 // ek user ke max itne active session (naye aane par sabse purane hat'te hain)
 const EDIT_WINDOW_MS = 15 * 60 * 1000;
 const MAX_UPLOAD_B64 = 9000000;
@@ -169,7 +171,7 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-app.get('/', (req, res) => res.json({ ok: true, app: 'GalaxyRelax', v: 4, time: Date.now() }));
+app.get('/', (req, res) => res.json({ ok: true, app: 'GalaxyRelax', v: 5, time: Date.now() }));
 app.get('/health', (req, res) => res.json({ ok: true, time: Date.now() }));
 
 // ---- rate limits (login/signup/config par sakht, baaki par dheela) ----
@@ -247,10 +249,10 @@ function authToken(token) {
   return s.uid;
 }
 function createSession(uid, ua) {
-  const token = rnd(64), now = Date.now();
-  q.insSession.run(sha256(token), uid, now, now + SESSION_MS, String(ua || '').slice(0, 120));
-  q.trimSessions.run(uid, uid, MAX_SESSIONS);       // token sirf memory me hota hai => band tab ke orphan sessions jama na hon
-  return token;
+  const token = rnd(64), now = Date.now(), exp = sessionEnd(now);
+  q.insSession.run(sha256(token), uid, now, exp, String(ua || '').slice(0, 120));
+  q.trimSessions.run(uid, uid, MAX_SESSIONS);
+  return { token, exp };
 }
 
 // ====== PUBLIC ACTIONS ======
@@ -275,7 +277,7 @@ const PUBLIC = {
     const uid = tx();
     const pv = getPv();
     for (const p of uidList()) if (p !== uid) emitTo(p, 'pv', { pv });      // the first user sees the new user
-    return { ok: true, token: createSession(uid, req.ua), uid, me: userOut(q.userById.get(uid)), ...keyInfo() };
+    return { ok: true, ...createSession(uid, req.ua), uid, me: userOut(q.userById.get(uid)), ...keyInfo() };
   },
   async login(req) {
     const username = normUser(req.username), pw = String(req.password || '');
@@ -284,7 +286,7 @@ const PUBLIC = {
     const ok = u && /^[a-f0-9]{64}$/.test(pw) && timingEq(await scrypt(pw, u.salt), u.hash);
     if (!ok) { if (!u) await scrypt('x', 'y'); noteFail(username); throw new E('bad_login', 'Wrong username or password'); }
     loginFails.delete(username);
-    return { ok: true, token: createSession(u.uid, req.ua), uid: u.uid, me: userOut(u), ...keyInfo() };
+    return { ok: true, ...createSession(u.uid, req.ua), uid: u.uid, me: userOut(u), ...keyInfo() };
   },
 };
 
@@ -578,7 +580,7 @@ setInterval(() => { try { q.purgeSessions.run(Date.now()); } catch (e) { /* igno
 process.on('unhandledRejection', (e) => console.error('unhandledRejection', e));
 
 if (require.main === module) {
-  server.listen(PORT, '0.0.0.0', () => console.log(`Galaxy Relax v4 listening on :${PORT}  data=${DATA_DIR}  origins=${ORIGINS.join(',')}`));
+  server.listen(PORT, '0.0.0.0', () => console.log(`Galaxy Relax v5 listening on :${PORT}  data=${DATA_DIR}  origins=${ORIGINS.join(',')}`));
   const stop = () => { io.close(); server.close(); try { db.close(); } catch (e) { /* ignore */ } process.exit(0); };
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
 }

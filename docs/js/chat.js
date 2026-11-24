@@ -43,13 +43,14 @@
     set(el.btnSearch, 'search'); set(el.btnChmenu, 'more'); set(el.msClose, 'close'); set(el.msIc, 'search');
     set(el.msUp, 'up'); set(el.msDown, 'down'); set(el.sdIc, 'down'); set(el.btnEmoji, 'emoji'); set(el.btnAttach, 'attach');
     set(el.sMic, 'mic'); set(el.sSend, 'send'); set(el.recCancel, 'trash'); set(el.recSend, 'send');
-    set(el.railLogoIc, 'orbit'); set(el.railChat, 'emoji'); set(el.railSky, 'moonStar'); set(el.railStar, 'star'); set(el.railSettings, 'settings');
+    const rail = (node, name) => { const i = node && node.querySelector('.ri'); if (i) i.innerHTML = u.ic(name); };
+    set(el.railLogoIc, 'orbit'); rail(el.railChat, 'emoji'); rail(el.railSky, 'moonStar'); rail(el.railStar, 'star'); rail(el.railSettings, 'settings');
   }
 
   ui.themeChanged = function () {
     const dark = core.resolvedTheme() === 'dark', ic = u.ic(dark ? 'sun' : 'moon');
     if (el.btnTheme) el.btnTheme.innerHTML = ic;
-    if (el.railTheme) el.railTheme.innerHTML = ic;
+    if (el.railTheme) { const i = el.railTheme.querySelector('.ri'); if (i) i.innerHTML = ic; }
   };
   const quickTheme = () => { core.setTheme(core.resolvedTheme() === 'dark' ? 'light' : 'dark'); u.haptic(8); };
 
@@ -59,14 +60,15 @@
     if (appEl && appEl.isConnected && !ui.ready) { appNext = appEl.nextSibling; appEl.remove(); }
   };
 
-  ui.start = function () {
+  ui.start = function (opts) {
     if (!appEl) appEl = document.getElementById('app');
     if (appEl && !appEl.isConnected) document.body.insertBefore(appEl, appNext && appNext.isConnected ? appNext : document.getElementById('overlay-root'));
     if (!ui.built) {
       cacheEls(); fillIcons(); bindEvents(); buildEmojiPanel(); setVh();
       ui.built = true;
     }
-    MC.showScreen('app');
+    if (opts && opts.keepDecoy) { const a = document.getElementById('app'); if (a) a.classList.remove('hidden'); }   // opening: the sky stays on top while it dissolves
+    else MC.showScreen('app');
     ui.ready = true;
     ui.themeChanged();
     ui.profileChanged();
@@ -79,6 +81,21 @@
   };
 
   /** Remove the private area from the page. Everything readable is wiped first, then the whole area is detached. */
+  let safeNode = null;
+  function safeEl() {
+    if (!safeNode) safeNode = h('div', { class: 'safe-pill' }, h('span', { html: u.ic('lock') }), 'Earlier messages are safe on the server');
+    return safeNode;
+  }
+  /** Rows of messages that are about to be cleared from this phone fade away first. */
+  ui.vanish = function (ids) {
+    return new Promise((res) => {
+      let any = false;
+      if (ui.ready) ids.forEach((id) => { const n = nodes.get(id); if (n) { n.row.classList.add('vanish'); any = true; } });
+      setTimeout(res, any ? 440 : 0);
+    });
+  };
+  ui.forget = function (id) { nodes.delete(id); };
+
   ui.sleep = function () {
     if (!ui.built || !ui.ready) return;
     ui.ready = false;
@@ -228,6 +245,10 @@
     const sub = el.person && el.person.querySelector('.sub'); if (sub && sub.textContent !== (txt || ' ')) sub.textContent = txt || ' ';
   };
   /** Desktop only (>= 1180 px): the other person's card. Rebuilt only when something it shows has changed. */
+  const EMPTY_ART = '<svg viewBox="0 0 132 96" aria-hidden="true"><defs><linearGradient id="spg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#CE8E98"/><stop offset="1" stop-color="#B8893B"/></linearGradient></defs>'
+    + '<g transform="rotate(-9 44 52)"><rect x="12" y="24" width="64" height="50" rx="12" fill="url(#spg)" opacity=".28"/></g>'
+    + '<g transform="rotate(7 86 50)"><rect x="52" y="20" width="68" height="54" rx="12" fill="var(--glass-solid)" stroke="url(#spg)" stroke-width="2"/><circle cx="74" cy="40" r="6.5" fill="url(#spg)"/><path d="M56 70l18-18 12 12 8-8 18 14z" fill="url(#spg)" opacity=".55"/></g>'
+    + '<path d="M22 14l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill="url(#spg)"/></svg>';
   ui.renderPerson = function () {
     if (!ui.ready || !el.person) return;
     const p = S.users.get(S.current);
@@ -237,11 +258,15 @@
     if (sig === personSig && el.person.childNodes.length) return;
     personSig = sig;
     const big = u.avatar(p, 104); big.classList.add('big');
-    const shared = h('div', { class: 'shared' });
-    for (let i = 0; i < 6; i++) {
-      const m = imgs[i], t = h('i', { class: m ? 'has' : '', onclick: m ? () => lightbox(m) : null });
-      if (m) core.getFileUrl(m).then((url) => { t.style.backgroundImage = 'url("' + url + '")'; }).catch(() => {});
-      shared.append(t);
+    const shared = h('div', { class: imgs.length ? 'shared' : 'shared-empty' });
+    if (!imgs.length) {
+      shared.append(h('span', { class: 'se-art', html: EMPTY_ART }), h('b', {}, 'No shared photos yet'), h('span', {}, 'Photos you share will appear here.'));
+    } else {
+      for (let i = 0; i < 6; i++) {
+        const m = imgs[i], t = h('i', { class: m ? 'has' : '', onclick: m ? () => lightbox(m) : null });
+        if (m) core.getFileUrl(m).then((url) => { t.style.backgroundImage = 'url("' + url + '")'; }).catch(() => {});
+        shared.append(t);
+      }
     }
     el.person.replaceChildren(big, h('h3', {}, p.name), h('div', { class: 'sub' }, statusInfo().txt || ' '),
       h('div', { class: 'abt' }, p.about || 'Say hello.'),
@@ -288,6 +313,16 @@
 
   // ================= Messages rendering =================
   const isNearBottom = () => { const w = el.msgsWrap; return w.scrollHeight - w.scrollTop - w.clientHeight < 150; };
+  let glideRaf = 0;
+  function glideBottom() {
+    cancelAnimationFrame(glideRaf);
+    const w = el.msgsWrap, from = w.scrollTop, dist = w.scrollHeight - w.clientHeight - from;
+    if (dist <= 0) return;
+    u.haptic(6);
+    const t0 = performance.now(), dur = Math.min(720, Math.max(260, dist * 0.45));
+    const step = (n) => { const k = Math.min(1, (n - t0) / dur), e = 1 - Math.pow(1 - k, 3); w.scrollTop = from + dist * e; if (k < 1) glideRaf = requestAnimationFrame(step); else markSeenLocal(); };
+    glideRaf = requestAnimationFrame(step);
+  }
   const scrollBottom = (smooth) => { const w = el.msgsWrap; w.scrollTo({ top: w.scrollHeight, behavior: smooth ? 'smooth' : 'auto' }); };
 
   const sigOf = (m) => [m.upd, m.status, m.pending ? 1 : 0, m.failed ? 1 : 0, m.uploading ? 1 : 0, m.starred, m.dec ? 1 : 0, S.searchQ, m._blob ? 1 : 0, m.edited, m.ts, (m.t || '').length, JSON.stringify(m.rx || {})].join('|');
@@ -301,9 +336,12 @@
     const stick = forceStick || isNearBottom();
     forceStick = false;
     const desired = [];
+    if (S.hidden && S.hidden[S.current]) desired.push(safeEl());
     if (S.more[S.current] && arr.length) desired.push(olderEl());
     let prev = null;
+    const stamp = core.isActive() && MC.stealth.isChat() ? Date.now() : 0;      // first time on screen: the 30 minutes start
     for (const m of arr) {
+      if (stamp && !m._shown) m._shown = stamp;
       const dk = u.dayKey(m.ts);
       const newDay = !prev || u.dayKey(prev.ts) !== dk;
       if (newDay) {
@@ -361,7 +399,7 @@
   }
   function updateFab() {
     const far = el.msgsWrap.scrollHeight - el.msgsWrap.scrollTop - el.msgsWrap.clientHeight > 320;
-    el.scrollDown.classList.toggle('hidden', !far);
+    el.scrollDown.classList.toggle('on', far);
     const n = S.current ? core.unreadCount(S.current) : 0;
     const sd = document.getElementById('sd-count');
     sd.classList.toggle('hidden', !n); sd.textContent = n;
@@ -639,7 +677,8 @@
     el.msgsWrap.addEventListener('scroll', () => {
       requestAnimationFrame(() => { updateFab(); if (isNearBottom()) markSeenLocal(); });
     }, { passive: true });
-    el.scrollDown.addEventListener('click', () => { scrollBottom(true); });
+    el.scrollDown.addEventListener('click', glideBottom);
+    ['touchstart', 'wheel', 'pointerdown'].forEach((ev) => el.msgsWrap.addEventListener(ev, () => cancelAnimationFrame(glideRaf), { passive: true }));
   }
 
   function toggleVoice(m) {
@@ -1010,8 +1049,9 @@
       sw('Shake to hide', 'Shake the phone to jump back to the sky', () => S.settings.shake !== false, async (on) => { S.settings.shake = on; core.saveSettings(); if (on) { const r = await MC.stealth.askMotion(); if (r === 'denied') u.toast('Motion access was declined'); } }),
       btn('key', 'Change secret code', 'The code you type in the “Name your planet” box. It is also the encryption key.', () => openChangeCode()),
       h('div', { class: 'set-sec' }, 'Security'),
-      h('div', { class: 'muted small pad' }, 'The app locks when it is closed or away for over a minute. Log in again, then type your unlock code in the sky. The code is never stored on this device.'),
-      btn('lock', 'Lock now', 'Alerts keep working', () => core.lockNow()),
+      h('div', { class: 'muted small pad' }, 'You log in once a day: the login lasts until midnight. The chat hides itself whenever you leave the app, and the unlock code is asked again every time. It is never stored on this device.'),
+      h('div', { class: 'muted small pad' }, 'Messages that have been seen disappear from this phone 30 minutes later. They stay safe on the server and come back when you type the unlock code.'),
+      btn('lock', 'Lock now', 'Forgets the unlock code. Alerts keep working', () => core.lockNow()),
       btn('edit', 'Change password', 'Your login password only. The unlock code stays the same.', () => openChangePassword()),
     ];
     if (ui.installEvt) rows.push(btn('download', 'Install Galaxy Relax', 'Add it to your home screen', async () => { ui.installEvt.prompt(); ui.installEvt = null; }));

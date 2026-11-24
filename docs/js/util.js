@@ -171,6 +171,26 @@
       else if (kind === 'planet') { tone(523, 523, t, 0.7, 0.07); tone(784, 784, t + 0.04, 0.6, 0.05); tone(1047, 1047, t + 0.09, 0.5, 0.03); }
     } catch (e) { /* ignore */ }
   };
+  /** A soft bell with a little room around it. i picks the note (a pentatonic ladder), so the planets sing different notes. */
+  let verb = null;
+  const NOTES = [659.25, 783.99, 880.0, 1046.5, 1318.5];
+  u.chime = (i, soft) => {
+    if (!actx) return;
+    try {
+      const t = actx.currentTime, f = NOTES[((i | 0) % NOTES.length + NOTES.length) % NOTES.length];
+      if (!verb) {
+        const len = Math.floor(actx.sampleRate * 1.8), ir = actx.createBuffer(2, len, actx.sampleRate);
+        for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let k = 0; k < len; k++) d[k] = (Math.random() * 2 - 1) * Math.pow(1 - k / len, 2.6); }
+        const cv = actx.createConvolver(); cv.buffer = ir; const wet = actx.createGain(); wet.gain.value = 0.5; cv.connect(wet); wet.connect(actx.destination); verb = cv;
+      }
+      [[1, 0.5], [2.0, 0.17], [3.01, 0.06], [4.2, 0.025]].forEach(([m, v], k) => {
+        const o = actx.createOscillator(), g = actx.createGain();
+        o.type = 'sine'; o.frequency.value = f * m;
+        g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v * (soft ? 0.45 : 1) * 0.2, t + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.6 - k * 0.28);
+        o.connect(g); g.connect(actx.destination); g.connect(verb); o.start(t); o.stop(t + 1.9);
+      });
+    } catch (e) { /* ignore */ }
+  };
   u.beep = (kind) => u.sfx(kind);
 
   // ---------- Toast ----------

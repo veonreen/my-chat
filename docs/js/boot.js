@@ -95,8 +95,9 @@
     try { st = await core.restore(); } catch (e) { st = 'none'; }
     const wait = Math.max(0, 450 - (Date.now() - t0));
     if (!isRetry) await u.sleep(wait);
-    if (st === 'none') { if (!flash) setMode('login'); MC.showScreen('auth'); }
-    else await enter();
+    if (st === 'expired' && !flash) { setMode('login'); showErr('auth-err', 'A new day has started. Please log in again.'); }
+    if (st === 'none' || st === 'expired') { if (!flash && st === 'none') setMode('login'); MC.showScreen('auth'); }
+    else { await enter(); if (flash) u.toast(flash, 4200); }
   }
 
   if ('serviceWorker' in navigator) {

@@ -26,7 +26,7 @@ const waitEv = (s, ev, pred = () => true, ms = 3000) => new Promise((res) => {
 (async () => {
   const srv = spawn(process.execPath, ['server.js'], { env: { ...process.env, PORT, DATA_DIR: data }, stdio: ['ignore', 'pipe', 'pipe'] });
   srv.stderr.on('data', (d) => process.stderr.write(d));
-  await sleep(1500);
+  await sleep(4000);
 
   console.log('\n[auth]');
   let r = (await http({ action: 'config' })).j;
